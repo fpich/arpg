@@ -102,6 +102,68 @@ async fn quic_loopback_handshake_join_and_commands() {
 }
 
 #[tokio::test]
+async fn quic_loopback_movement_datagram() {
+    let data = Arc::new(arpg_data::GameData::default());
+    let rules = Arc::new(arpg_rules::GameRules::default());
+    let game = Arc::new(Mutex::new(GameInstance::new(data, rules, [7u8; 32])));
+
+    let (server, cert_der) = GameServer::bind_loopback(Arc::clone(&game)).unwrap();
+    let server = Arc::new(server);
+    let addr = server.local_addr;
+    let (shutdown_tx, shutdown_rx) = tokio::sync::mpsc::channel(1);
+    tokio::spawn(Arc::clone(&server).serve(shutdown_rx));
+
+    let client = client_endpoint(cert_der.clone());
+    let conn = client.connect(addr, "localhost").unwrap().await.unwrap();
+    let (mut send, mut recv) = conn.open_bi().await.unwrap();
+
+    // handshake
+    let hello = msg::ClientHello {
+        protocol_version: arpg_server::PROTOCOL_VERSION.0,
+        client_build: 1,
+        supported_features: vec![],
+    };
+    send.write_all(&encode_frame(&hello)).await.unwrap();
+    let _ = read_frame(&mut recv).await;
+
+    // join
+    let join = msg::JoinGameRequest {
+        game_id: vec![],
+        character_id: 1,
+    };
+    send.write_all(&encode_frame(&join)).await.unwrap();
+    let _ = read_frame(&mut recv).await;
+
+    // movement via unreliable datagram (section 136)
+    let env = msg::CommandEnvelope {
+        sequence: 1,
+        client_tick: 1,
+        player_id: 1,
+        command: Some(msg::command_envelope::Command::Move(msg::MoveCommand {
+            x: 777,
+            y: 0,
+            movement_mode: 0,
+        })),
+    };
+    conn.send_datagram(encode_frame(&env).into()).unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    for _ in 0..10 {
+        game.lock().unwrap().tick();
+    }
+    let pos = game
+        .lock()
+        .unwrap()
+        .state
+        .players
+        .get(&PlayerId(1))
+        .map(|p| p.pos);
+    assert!(pos.is_some(), "datagram movement must reach the sim");
+
+    shutdown_tx.send(()).await.unwrap();
+}
+
+#[tokio::test]
 async fn quic_loopback_rejects_incompatible_protocol() {
     let data = Arc::new(arpg_data::GameData::default());
     let rules = Arc::new(arpg_rules::GameRules::default());

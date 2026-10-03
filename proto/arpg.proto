@@ -95,4 +95,11 @@ message Snapshot {
   uint64 tick = 2;
   repeated PlayerView players = 3;
   uint32 last_processed_command_sequence = 4;
+  repeated EntityDelta deltas = 5;
+}
+
+message EntityResyncResponse {
+  uint64 entity_id = 1;
+  uint64 server_revision = 2;
+  PlayerView player_view = 3;
 }

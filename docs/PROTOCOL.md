@@ -41,9 +41,19 @@ Une commande gameplay n'est acceptée que dans `Running` (`Session::is_command_a
 ## Réplication (§137-143)
 
 - `PlayerView` : sous-ensemble visible de l'état serveur (INV-013).
-- `Snapshot { snapshot_id, tick, players[], last_processed_command_sequence }` (§143).
-- `EntityDelta { entity_id, base_revision, new_revision, field_mask, ... }` et `EntityResyncRequest` : les revisions sont prévues par le schéma ; l'implémentation du delta/resync complet est planifiée pour la suite de M1/M3.
+- `Snapshot { snapshot_id, tick, players[], last_processed_command_sequence, deltas[] }` (§143).
+- **Revisions** (§141) : chaque vue répliquée possède une `revision` incrémentée à chaque mutation (`ReplicationTracker::touch`). Les deltas ne sont produits que pour les entités dont la revision serveur dépasse la base acquittée du client.
+- **Delta** (§141) : `EntityDelta { entity_id, base_revision, new_revision, field_mask, player_view }`. Après ACK client (`ReplicationTracker::acknowledge`), plus aucun delta n'est émis sans nouvelle mutation.
+- **Resync** (§142) : si `base_revision != client_revision`, le client émet `EntityResyncRequest` et le serveur répond `EntityResyncResponse` avec l'état complet et la revision serveur.
+
+## Datagrams non fiables (§136)
+
+Les commandes de **mouvement** peuvent transiter en datagram QUIC (perte tolérée : une intention de mouvement plus récente supplante une ancienne). Toute commande avec effet de bord (inventaire, trade, compétences) reste sur le stream fiable. Le serveur n'accepte que `Move` sur le chemin datagram.
+
+## Réseau chaotique (§186)
+
+Le harness (`crates/arpg-sim/tests/network_chaos.rs`) valide que pour une même séquence de commandes finalement acceptées, le hash serveur est indépendant du timing d'arrivée (latence/jitter), des duplications et des pertes-avec-retransmission (fenêtre d'envoi bloquée sur le paquet perdu, séquences monotones par joueur préservées).
 
 ## Ce qui reste hors de ce document
 
-Les datagrams non fiables (§136), l'interest management (§140) et la prédiction client (§144-145) sont planifiés avec les milestones suivants.
+L'interest management (§140) et la prédiction client (§144-145) sont planifiés avec les milestones suivants (M3+).

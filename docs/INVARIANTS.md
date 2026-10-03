@@ -18,7 +18,7 @@
 | INV-010 | Un ItemId possède exactement un emplacement | `ItemLocation` (à implémenter en M6) | à implémenter |
 | INV-011 | Toute transaction inventaire/échange est atomique | à implémenter (M6/M7) | à implémenter |
 | INV-012 | Toute modification persistante possède une révision | à implémenter (M7) | à implémenter |
-| INV-013 | Les données client sont un sous-ensemble de l'état serveur | à implémenter (M1, DTO réseau) | à implémenter |
+| INV-013 | Les données client sont un sous-ensemble de l'état serveur | `arpg-server::bridge` (DTO `PlayerView`/`Snapshot`/`EntityDelta` seulement) | `arpg-server/tests/session.rs::snapshot_contains_only_client_visible_state` |
 | INV-014 | Les systèmes gameplay n'accèdent ni réseau, ni disque, ni SQL | Graphe de dépendances §6 interdit `tokio`/`sqlx` dans `arpg-sim` | revue de dépendances |
 | INV-015 | Une règle gameplay a un point d'implémentation unique | Phases de tick §8 : un système par phase (en cours) | à compléter |
 

@@ -1,5 +1,4 @@
 use crate::session::{Session, PROTOCOL_VERSION};
-use arpg_core::PlayerId;
 use arpg_protocol::messages as msg;
 use arpg_sim::GameInstance;
 use prost::Message;
@@ -52,7 +51,7 @@ pub async fn read_frame<S: AsyncReadExt + Unpin>(stream: &mut S) -> Result<Vec<u
     Ok(payload)
 }
 
-/// Loopback-only QUIC game server (SPEC.md sections 124-134).
+/// Loopback-only QUIC game server (SPEC.md sections 124-146).
 pub struct GameServer {
     pub endpoint: Endpoint,
     pub local_addr: SocketAddr,
@@ -125,7 +124,7 @@ impl GameServer {
             Ok(h) => h,
             Err(_) => return,
         };
-        let mut session = Session::new(PlayerId(0));
+        let mut session = Session::new(arpg_core::PlayerId(0));
         let accepted = session.handle_client_hello(&hello);
         let reply = msg::ServerHello {
             protocol_version: PROTOCOL_VERSION.0,
@@ -158,7 +157,7 @@ impl GameServer {
             Ok(j) => j,
             Err(_) => return,
         };
-        let player = PlayerId(join.character_id);
+        let player = arpg_core::PlayerId(join.character_id);
         let (server_tick, input_delay, datapack_hash, tick_rate) = {
             let mut game = self.game.lock().unwrap();
             if game.rules.max_players as usize <= game.state.players.len() {
@@ -190,7 +189,32 @@ impl GameServer {
             return;
         }
 
-        // --- Command loop: relay envelopes into the sim ---
+        // --- Post-join: streams (reliable) + datagrams (unreliable, section 136) ---
+        // Movement commands may arrive as datagrams; loss is acceptable since
+        // a newer movement intent supersedes an older one. Everything else
+        // (inventory, trade, skills with side effects) stays on the reliable
+        // stream.
+        let game = Arc::clone(&self.game);
+        let conn_for_datagrams = connection.clone();
+        let datagram_task = tokio::spawn(async move {
+            loop {
+                let buf = match conn_for_datagrams.read_datagram().await {
+                    Ok(b) => b,
+                    Err(_) => break,
+                };
+                if let Ok(wire) = decode_frame::<msg::CommandEnvelope>(&buf) {
+                    // only movement is allowed on the unreliable path
+                    if matches!(wire.command, Some(msg::command_envelope::Command::Move(_))) {
+                        if let Some(sim_env) = crate::bridge::wire_to_sim(&wire) {
+                            let mut g = game.lock().unwrap();
+                            g.submit_command(sim_env);
+                        }
+                    }
+                }
+            }
+        });
+
+        // Reliable command loop
         while let Ok(frame) = read_frame(&mut recv).await {
             if !session.is_command_accepted() {
                 break;
@@ -202,7 +226,7 @@ impl GameServer {
             if let Some(sim_env) = crate::bridge::wire_to_sim(&wire) {
                 let ack = {
                     let mut game = self.game.lock().unwrap();
-                    game.submit_command(sim_env.clone());
+                    game.submit_command(sim_env);
                     session.record_processed(&wire);
                     msg::CommandAck {
                         player_id: wire.player_id,
@@ -216,6 +240,7 @@ impl GameServer {
                 }
             }
         }
+        datagram_task.abort();
         session.disconnect();
     }
 }

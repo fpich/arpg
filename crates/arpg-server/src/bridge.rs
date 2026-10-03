@@ -75,5 +75,56 @@ pub fn snapshot_to_wire(
             })
             .collect(),
         last_processed_command_sequence: last_seq,
+        deltas: vec![],
+    }
+}
+
+/// Convert a sim ClientReplication into wire deltas (section 141).
+pub fn replication_to_wire(
+    repl: &arpg_sim::ClientReplication,
+    ack: &mut impl FnMut(PlayerId, u64),
+) -> msg::Snapshot {
+    let mut deltas = Vec::new();
+    for &(entity, base, rev, ref p) in &repl.deltas {
+        ack(entity, rev);
+        deltas.push(msg::EntityDelta {
+            entity_id: entity.0 as u64,
+            base_revision: base,
+            new_revision: rev,
+            field_mask: 0xFFFF,
+            player_view: Some(msg::PlayerView {
+                player_id: p.player.0,
+                x: p.pos.x,
+                y: p.pos.y,
+                life: p.life,
+                mana: p.mana,
+            }),
+        });
+    }
+    msg::Snapshot {
+        snapshot_id: repl.snapshot_id,
+        tick: repl.tick.0,
+        players: vec![],
+        last_processed_command_sequence: 0,
+        deltas,
+    }
+}
+
+/// Full entity state after an EntityResyncRequest (section 142).
+pub fn resync_to_wire(
+    entity: PlayerId,
+    revision: u64,
+    p: &arpg_sim::PlayerState,
+) -> msg::EntityResyncResponse {
+    msg::EntityResyncResponse {
+        entity_id: entity.0 as u64,
+        server_revision: revision,
+        player_view: Some(msg::PlayerView {
+            player_id: p.player.0,
+            x: p.pos.x,
+            y: p.pos.y,
+            life: p.life,
+            mana: p.mana,
+        }),
     }
 }

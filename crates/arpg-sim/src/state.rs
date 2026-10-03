@@ -1,5 +1,6 @@
 use crate::command::{Admission, ClientCommand, CommandEnvelope};
 use crate::phase::Phase;
+use crate::replication::ReplicationTracker;
 use crate::scheduler::{CommandQueue, ScheduledCommand, Scheduler, DEFAULT_INPUT_DELAY_TICKS};
 use arpg_core::{EntityId, EventBuffer, EventOrderKey, GameEvent, PlayerId, Tick, WorldPos};
 use std::collections::BTreeMap;
@@ -71,6 +72,7 @@ pub struct GameInstance {
     scheduler: Scheduler,
     command_queue: CommandQueue,
     event_buffer: EventBuffer,
+    pub replication: ReplicationTracker,
 }
 
 pub struct TickResult {
@@ -93,6 +95,7 @@ impl GameInstance {
             scheduler: Scheduler::new(),
             command_queue: CommandQueue::new(),
             event_buffer: EventBuffer::new(),
+            replication: ReplicationTracker::new(),
         }
     }
 
@@ -171,6 +174,7 @@ impl GameInstance {
                 if let ClientCommand::Move(intent) = &cmd.envelope.command {
                     if let Some(p) = self.state.players.get_mut(&cmd.player) {
                         p.pos = intent.direction;
+                        let _ = self.replication.touch(cmd.player);
                         let key = self.next_event_key(arpg_core::EntityId(cmd.player.0 as u64));
                         self.event_buffer.emit(
                             key,
