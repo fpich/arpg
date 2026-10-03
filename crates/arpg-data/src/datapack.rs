@@ -24,7 +24,7 @@ pub struct ClassDefinition {
     pub mana_per_level: i64,
 }
 
-pub const AMazon: ClassId = ClassId(0);
+pub const AMAZON: ClassId = ClassId(0);
 pub const ASSASSIN: ClassId = ClassId(1);
 pub const NECROMANCER: ClassId = ClassId(2);
 pub const BARBARIAN: ClassId = ClassId(3);
@@ -35,7 +35,7 @@ pub const DRUID: ClassId = ClassId(6);
 /// The 7 classes of the reference datapack.
 pub const CLASSES: [ClassDefinition; 7] = [
     ClassDefinition {
-        id: AMazon,
+        id: AMAZON,
         name: "Amazon",
         primary_skill: SkillId(100),
         life_per_level: 20,
@@ -549,9 +549,11 @@ pub const RECIPES: [(&str, &[&str]); 5] = [
 /// pipeline: normalized sources -> semantic validation -> compilation).
 /// The content hash is derived from the compiled content, not the sources.
 pub fn compile_reference_datapack() -> GameData {
-    let mut data = GameData::default();
-    data.schema_version = DATA_SCHEMA_VERSION;
-    data.content_revision = CONTENT_REVISION;
+    let mut data = GameData {
+        schema_version: DATA_SCHEMA_VERSION,
+        content_revision: CONTENT_REVISION,
+        ..GameData::default()
+    };
 
     // skills: one signature skill per class plus shared base attacks
     let mut skills = BTreeMap::new();
@@ -702,12 +704,13 @@ pub fn compile_reference_datapack() -> GameData {
         "Frenzy Blade",
         "Legend Sword",
     ];
-    let mut next_id = 1u32;
-    for name in base_names
+    for (offset, name) in base_names
         .iter()
         .chain(exceptional_names.iter())
         .chain(elite_names.iter())
+        .enumerate()
     {
+        let next_id = (offset + 1) as u32;
         items.insert(
             next_id,
             ItemDefinition {
@@ -715,7 +718,6 @@ pub fn compile_reference_datapack() -> GameData {
                 name: (*name).into(),
             },
         );
-        next_id += 1;
     }
     data.items = items;
 
