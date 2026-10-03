@@ -2,6 +2,7 @@
 pub struct GameRules {
     pub max_players: u8,
     pub difficulty: u32,
+    pub pvp_mode: PvpMode,
     pub ruleset_hash: [u8; 32],
 }
 
@@ -10,6 +11,7 @@ impl Default for GameRules {
         GameRules {
             max_players: 8,
             difficulty: 0,
+            pvp_mode: PvpMode::Hostility,
             ruleset_hash: [0; 32],
         }
     }

@@ -84,6 +84,8 @@ fn snapshot_contains_only_client_visible_state() {
             pos: arpg_core::WorldPos::new(10, 20),
             life: 90,
             mana: 40,
+            level: 1,
+            experience: 0,
         },
     );
     let snap = arpg_server::bridge::snapshot_to_wire(1, Tick(5), &players, 9);

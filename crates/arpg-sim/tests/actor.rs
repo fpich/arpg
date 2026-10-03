@@ -140,6 +140,8 @@ fn damage_kills_and_credits_killer() {
     let target = EntityId(1);
     let killer = EntityId(2);
 
+    inst.hostility
+        .declare(arpg_core::PlayerId(2), arpg_core::PlayerId(1));
     inst.apply_damage(target, killer, 100);
     let actor = inst.actors.get(&target).unwrap();
     assert_eq!(actor.lifecycle, arpg_core::Lifecycle::PendingDeath);

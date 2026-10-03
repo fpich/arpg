@@ -22,6 +22,10 @@ pub struct PlayerState {
     pub pos: WorldPos,
     pub life: i64,
     pub mana: i64,
+    /// Character level, used by the XP pipeline (SPEC.md section 110).
+    pub level: i64,
+    /// Experience points (SPEC.md section 110).
+    pub experience: u64,
 }
 
 /// A monster in the world: position, life, lifecycle-able target of
@@ -130,6 +134,14 @@ pub struct GameInstance {
     command_queue: CommandQueue,
     event_buffer: EventBuffer,
     pub replication: ReplicationTracker,
+    /// Party management (SPEC.md section 109).
+    pub parties: crate::social::PartySystem,
+    /// Hostility declarations (SPEC.md sections 113-114).
+    pub hostility: crate::social::HostilityMatrix,
+    /// Summons and hirelings (SPEC.md sections 66-67).
+    pub summons: crate::summon::SummonSystem,
+    /// XP pipeline configuration (SPEC.md section 110).
+    pub xp_pipeline: crate::social::XpPipeline,
 }
 
 pub struct TickResult {
@@ -173,6 +185,10 @@ impl GameInstance {
             command_queue: CommandQueue::new(),
             event_buffer: EventBuffer::new(),
             replication: ReplicationTracker::new(),
+            parties: crate::social::PartySystem::new(),
+            hostility: crate::social::HostilityMatrix::default(),
+            summons: crate::summon::SummonSystem::new(),
+            xp_pipeline: crate::social::XpPipeline::D2_LIKE,
         }
     }
 
@@ -184,6 +200,8 @@ impl GameInstance {
                 pos,
                 life: 100,
                 mana: 50,
+                level: 1,
+                experience: 0,
             },
         );
         self.actors.insert(
@@ -351,6 +369,9 @@ impl GameInstance {
         }
         hash_input.extend_from_slice(&self.state.expired_items.to_le_bytes());
         hash_input.extend_from_slice(&self.scheduler.canonical_hash_input());
+        self.parties.hash_bytes(&mut hash_input);
+        self.hostility.hash_bytes(&mut hash_input);
+        self.summons.hash_bytes(&mut hash_input);
         let state_hash = arpg_core::hash::state_hash(&hash_input);
 
         TickResult {
@@ -890,7 +911,32 @@ impl GameInstance {
                 crate::quest::QuestTrigger::MonsterKilled(arpg_core::MonsterDefId(0)),
                 source,
             );
+            if was_alive && now_dead {
+                self.award_monster_xp(target);
+            }
         }
+    }
+
+    /// Multiplayer XP pipeline (SPEC.md section 110): participants are the
+    /// alive players; party members share via the party distribution.
+    fn award_monster_xp(&mut self, monster: EntityId) {
+        const MONSTER_BASE_XP: u64 = 50;
+        let participants: Vec<(PlayerId, i64)> = self
+            .state
+            .players
+            .values()
+            .filter(|p| p.life > 0)
+            .map(|p| (p.player, p.level))
+            .collect();
+        let awards = self
+            .xp_pipeline
+            .distribute(MONSTER_BASE_XP, &participants, &self.parties);
+        for (player, xp) in awards {
+            if let Some(p) = self.state.players.get_mut(&player) {
+                p.experience = p.experience.saturating_add(xp);
+            }
+        }
+        let _ = monster;
     }
 
     /// LootResolution phase (SPEC.md section 71): roll queued drops onto the
@@ -1029,6 +1075,21 @@ impl GameInstance {
         else {
             return;
         };
+        // PvP damage gating (SPEC.md sections 113-114): a player can only
+        // damage another player when the ruleset PvpMode allows it and the
+        // pair is hostile. Party/Neutral pairs never damage each other.
+        if let Some(attacker) = self
+            .state
+            .players
+            .keys()
+            .find(|p| EntityId(p.0 as u64) == source)
+            .copied()
+        {
+            let relation = self.parties.relation(attacker, player_id, &self.hostility);
+            if !self.hostility.damage_allowed(self.rules.pvp_mode, relation) {
+                return;
+            }
+        }
         let Some(p) = self.state.players.get_mut(&player_id) else {
             return;
         };

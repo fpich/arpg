@@ -49,6 +49,7 @@ fn use_skill_impact_damages_target() {
     inst.register_skill(fireball()).unwrap();
     inst.add_player(PlayerId(1), WorldPos::new(0, 0));
     inst.add_player(PlayerId(2), WorldPos::new(256, 0));
+    inst.hostility.declare(PlayerId(1), PlayerId(2));
     let target_pos = WorldPos::new(256, 0);
     inst.submit_command(skill_cmd(PlayerId(1), 1, SkillId(1), Some(target_pos)));
     let life_before = inst.state.players.get(&PlayerId(2)).unwrap().life;
@@ -80,6 +81,7 @@ fn use_skill_spawns_missile_that_hits() {
     inst.register_skill(missile_skill).unwrap();
     inst.add_player(PlayerId(1), WorldPos::new(0, 0));
     inst.add_player(PlayerId(2), WorldPos::new(256, 0));
+    inst.hostility.declare(PlayerId(1), PlayerId(2));
     inst.submit_command(skill_cmd(
         PlayerId(1),
         1,
@@ -127,6 +129,7 @@ fn unregistered_skill_is_ignored() {
     let mut inst = setup();
     inst.add_player(PlayerId(1), WorldPos::new(0, 0));
     inst.add_player(PlayerId(2), WorldPos::new(256, 0));
+    inst.hostility.declare(PlayerId(1), PlayerId(2));
     inst.submit_command(skill_cmd(
         PlayerId(1),
         1,
