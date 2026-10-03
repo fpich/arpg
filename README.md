@@ -11,8 +11,9 @@ Spécification normative : [SPEC.md](SPEC.md).
 | `arpg-core` | IDs, Tick, fixed-point, RNG hiérarchique (ChaCha8 + BLAKE3), state hash |
 | `arpg-data` | `GameData` statique (contenu datapack) |
 | `arpg-rules` | `GameRules` (ruleset d'une partie) |
-| `arpg-sim` | `GameInstance`, scheduler, phases de tick, commandes |
-| `arpg-world` / `arpg-ai` | Monde, IA (M2/M5) |
+| `arpg-sim` | `GameInstance`, scheduler, phases de tick, commandes, résolution de mouvement (M2) |
+| `arpg-world` | Collision, A* déterministe, grille spatiale, génération procédurale avec validation BFS (M2) |
+| `arpg-ai` | IA (M5) |
 | `arpg-protocol` | Messages Protobuf `arpg.v1`, handshake, snapshots (M1) |
 | `arpg-server` | Endpoint QUIC loopback, sessions, pont wire↔sim (M1) |
 | `arpg-persistence` | Persistance personnages (M7) |
