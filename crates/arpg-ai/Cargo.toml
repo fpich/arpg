@@ -7,5 +7,9 @@ license.workspace = true
 
 [dependencies]
 arpg-core.workspace = true
-arpg-world.workspace = true
 arpg-sim.workspace = true
+
+[dev-dependencies]
+arpg-data.workspace = true
+arpg-rules.workspace = true
+arpg-world.workspace = true

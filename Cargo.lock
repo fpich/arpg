@@ -28,6 +28,8 @@ name = "arpg-ai"
 version = "0.1.0"
 dependencies = [
  "arpg-core",
+ "arpg-data",
+ "arpg-rules",
  "arpg-sim",
  "arpg-world",
 ]

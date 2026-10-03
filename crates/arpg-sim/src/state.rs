@@ -23,6 +23,15 @@ pub struct PlayerState {
     pub mana: i64,
 }
 
+/// A monster in the world: position, life, lifecycle-able target of
+/// combat. Monsters are driven by the AI brain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MonsterState {
+    pub entity: EntityId,
+    pub pos: WorldPos,
+    pub life: i64,
+}
+
 #[derive(Debug, Default)]
 pub struct GameState {
     pub tick: Tick,
@@ -80,6 +89,10 @@ pub struct GameInstance {
     pub skills: BTreeMap<arpg_core::SkillId, crate::skill::SkillDefinition>,
     pub missiles: Vec<crate::missile::MissileInstance>,
     next_missile_entity: u64,
+    pub monsters: BTreeMap<EntityId, MonsterState>,
+    monster_move_intents: BTreeMap<EntityId, WorldPos>,
+    pub ai_brain: Option<Box<dyn crate::ai::AiBrain>>,
+    next_monster_entity: u64,
     /// Active level; when None, movement applies without terrain collision
     /// (used by tests and headless instances without a generated world).
     pub level: Option<LevelInstance>,
@@ -110,6 +123,10 @@ impl GameInstance {
             skills: BTreeMap::new(),
             missiles: Vec::new(),
             next_missile_entity: 1 << 60,
+            monsters: BTreeMap::new(),
+            monster_move_intents: BTreeMap::new(),
+            ai_brain: None,
+            next_monster_entity: 2 << 40,
             level: None,
             scheduler: Scheduler::new(),
             command_queue: CommandQueue::new(),
@@ -163,6 +180,33 @@ impl GameInstance {
         Ok(())
     }
 
+    /// Plug an AI brain; it is consulted during Perception/AiDecision.
+    pub fn set_ai_brain(&mut self, brain: Box<dyn crate::ai::AiBrain>) {
+        self.ai_brain = Some(brain);
+    }
+
+    /// Spawn a monster and notify the brain (SPEC.md section 60).
+    pub fn spawn_monster(&mut self, home: WorldPos) -> EntityId {
+        self.next_monster_entity += 1;
+        let entity = EntityId(self.next_monster_entity);
+        self.monsters.insert(
+            entity,
+            MonsterState {
+                entity,
+                pos: home,
+                life: 50,
+            },
+        );
+        self.actors.insert(entity, crate::actor::Actor::new(entity));
+        if let Some(brain) = self.ai_brain.as_mut() {
+            brain.on_spawn(entity, home);
+        }
+        let key = self.next_event_key(entity);
+        self.event_buffer
+            .emit(key, GameEvent::EntitySpawned(entity));
+        entity
+    }
+
     pub fn tick(&mut self) -> TickResult {
         self.state.tick = self.state.tick.next();
         let tick = self.state.tick;
@@ -192,6 +236,12 @@ impl GameInstance {
                 hash_input.extend_from_slice(&(obj.state as u8).to_le_bytes());
                 hash_input.extend_from_slice(&obj.cooldown_until.0.to_le_bytes());
             }
+        }
+        for (id, m) in &self.monsters {
+            hash_input.extend_from_slice(&id.0.to_le_bytes());
+            hash_input.extend_from_slice(&m.pos.x.to_le_bytes());
+            hash_input.extend_from_slice(&m.pos.y.to_le_bytes());
+            hash_input.extend_from_slice(&m.life.to_le_bytes());
         }
         for m in &self.missiles {
             hash_input.extend_from_slice(&m.entity.0.to_le_bytes());
@@ -256,6 +306,14 @@ impl GameInstance {
             }
         }
 
+        if let Phase::Perception = phase {
+            self.ai_perceive();
+        }
+
+        if let Phase::AiDecision = phase {
+            self.ai_decide(tick);
+        }
+
         if let Phase::ActionStateAdvance = phase {
             self.advance_actions(tick);
             self.resolve_cast_impacts();
@@ -268,6 +326,7 @@ impl GameInstance {
         if let Phase::MovementResolution = phase {
             self.resolve_movement();
             self.state.movement_intents.clear();
+            self.resolve_monster_moves();
         }
 
         if let Phase::InteractionResolution = phase {
@@ -293,6 +352,114 @@ impl GameInstance {
                     }
                 }
             }
+        }
+    }
+
+    /// Perception phase (SPEC.md section 60): build the read-only world
+    /// view for the brain.
+    fn ai_perceive(&mut self) {
+        // nothing to do: the view is built lazily in ai_decide
+    }
+
+    /// AiDecision phase (SPEC.md section 60): the brain produces commands;
+    /// the sim applies them. Monsters never mutate the world directly.
+    fn ai_decide(&mut self, tick: arpg_core::Tick) {
+        let Some(brain) = self.ai_brain.as_mut() else {
+            return;
+        };
+        if self.monsters.is_empty() {
+            return;
+        }
+        let view = crate::ai::AiWorldView {
+            players: self
+                .state
+                .players
+                .values()
+                .map(|p| (EntityId(p.player.0 as u64), p.pos))
+                .collect(),
+            monsters: self.monsters.values().map(|m| (m.entity, m.pos)).collect(),
+        };
+        let commands = brain.think(tick, &view);
+        for (entity, command) in commands {
+            match command {
+                crate::ai::AiCommand::MoveTo(dest) => {
+                    self.monster_move_intents.insert(entity, dest);
+                }
+                crate::ai::AiCommand::Attack(target) => {
+                    self.monster_attack(entity, target);
+                }
+            }
+        }
+    }
+
+    /// A monster attacks a player: melee-range damage applied through the
+    /// normal damage path so kill credit and PendingDeath work (SPEC.md
+    /// sections 13-14, 46).
+    fn monster_attack(&mut self, monster: EntityId, target: EntityId) {
+        let Some(m) = self.monsters.get(&monster) else {
+            return;
+        };
+        let Some(p) = self
+            .state
+            .players
+            .values()
+            .find(|p| EntityId(p.player.0 as u64) == target)
+        else {
+            return;
+        };
+        let within_range = m.pos.dist2(p.pos) <= (2 * 256) * (2 * 256);
+        if !within_range {
+            return;
+        }
+        let amount = 5i64;
+        self.apply_damage(target, monster, amount);
+    }
+
+    /// Apply AI movement intents recorded during AiDecision, in canonical
+    /// entity order, with entity-collision like players.
+    fn resolve_monster_moves(&mut self) {
+        if self.monster_move_intents.is_empty() {
+            return;
+        }
+        let intents: Vec<(EntityId, WorldPos)> = self
+            .monster_move_intents
+            .iter()
+            .map(|(e, d)| (*e, *d))
+            .collect();
+        self.monster_move_intents.clear();
+        for (entity, dest) in intents {
+            let Some(m) = self.monsters.get(&entity) else {
+                continue;
+            };
+            let from = m.pos;
+            if from == dest {
+                continue;
+            }
+            if let Some(level) = &self.level {
+                if !level.walkable_at(dest) {
+                    continue;
+                }
+            }
+            // one tile per tick toward the destination, axis-aligned
+            let dx = (dest.x - from.x).signum() * 256;
+            let dy = (dest.y - from.y).signum() * 256;
+            let next = WorldPos::new(from.x + dx, from.y + dy);
+            let occupied = self
+                .state
+                .players
+                .values()
+                .any(|p| p.pos.tile() == next.tile())
+                || self
+                    .monsters
+                    .values()
+                    .any(|other| other.entity != entity && other.pos.tile() == next.tile());
+            if occupied {
+                continue;
+            }
+            let Some(m) = self.monsters.get_mut(&entity) else {
+                continue;
+            };
+            m.pos = next;
         }
     }
 

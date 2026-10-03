@@ -21,7 +21,7 @@ fn idle_becomes_chase_when_enemy_in_aggro_radius() {
     let view = PerceptionView {
         enemies: vec![enemy(1, 256, 0)],
     };
-    let intent = agent.think(Tick(10), &view, &params());
+    let intent = agent.think(Tick(10), WorldPos::new(0, 0), &view, &params());
     assert_eq!(agent.state, AiState::Chase);
     assert!(matches!(intent, AiIntent::MoveTo(_)));
 }
@@ -32,12 +32,12 @@ fn chase_becomes_attack_in_range() {
     let far = PerceptionView {
         enemies: vec![enemy(1, 2048, 0)],
     };
-    agent.think(Tick(0), &far, &params());
+    agent.think(Tick(0), WorldPos::new(0, 0), &far, &params());
     assert_eq!(agent.state, AiState::Chase);
     let near = PerceptionView {
         enemies: vec![enemy(1, 256, 0)],
     };
-    let intent = agent.think(Tick(5), &near, &params());
+    let intent = agent.think(Tick(5), WorldPos::new(0, 0), &near, &params());
     assert_eq!(agent.state, AiState::Attack);
     assert!(matches!(intent, AiIntent::AttackTarget(t) if t == EntityId(1)));
 }
@@ -49,20 +49,20 @@ fn leash_pulls_home_when_target_too_far() {
     let far = PerceptionView {
         enemies: vec![enemy(1, 20_000, 0)],
     };
-    agent.think(Tick(0), &far, &params());
+    agent.think(Tick(0), WorldPos::new(0, 0), &far, &params());
     assert_eq!(agent.state, AiState::Idle);
     // close target: idle -> chase
     let close = PerceptionView {
         enemies: vec![enemy(1, 256, 0)],
     };
-    let intent = agent.think(Tick(5), &close, &params());
+    let intent = agent.think(Tick(5), WorldPos::new(0, 0), &close, &params());
     assert_eq!(agent.state, AiState::Chase);
     assert!(matches!(intent, AiIntent::MoveTo(_)));
     // target runs beyond the leash radius: chase -> leash
     let beyond_leash = PerceptionView {
         enemies: vec![enemy(1, 30_000, 0)],
     };
-    let intent = agent.think(Tick(10), &beyond_leash, &params());
+    let intent = agent.think(Tick(10), WorldPos::new(0, 0), &beyond_leash, &params());
     assert_eq!(agent.state, AiState::Leash);
     assert!(matches!(intent, AiIntent::MoveTo(p) if p == WorldPos::new(0, 0)));
 }
@@ -86,7 +86,7 @@ fn target_selection_is_nearest_then_entity_id() {
     let view = PerceptionView {
         enemies: vec![enemy(5, 1024, 0), enemy(3, 512, 0), enemy(2, 512, 0)],
     };
-    agent.think(Tick(0), &view, &params());
+    agent.think(Tick(0), WorldPos::new(0, 0), &view, &params());
     assert_eq!(
         agent.blackboard.current_target,
         Some(EntityId(2)),
@@ -98,7 +98,7 @@ fn target_selection_is_nearest_then_entity_id() {
 fn empty_perception_yields_no_intent() {
     let mut agent = AiAgent::new(EntityId(10), WorldPos::new(0, 0));
     let view = PerceptionView::default();
-    let intent = agent.think(Tick(0), &view, &params());
+    let intent = agent.think(Tick(0), WorldPos::new(0, 0), &view, &params());
     assert_eq!(intent, AiIntent::None);
     assert_eq!(agent.state, AiState::Idle);
 }

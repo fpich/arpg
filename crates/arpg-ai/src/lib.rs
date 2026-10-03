@@ -1,3 +1,4 @@
+pub mod brain;
 pub mod packs;
 
 use arpg_core::{EntityId, Tick, WorldPos};
@@ -112,24 +113,39 @@ impl AiAgent {
     }
 
     /// Perception -> blackboard -> transition -> intent (SPEC.md section 60).
-    pub fn think(&mut self, tick: Tick, view: &PerceptionView, params: &AiParams) -> AiIntent {
-        self.update_blackboard(tick, view, params);
-        self.transition(tick, view, params);
+    pub fn think(
+        &mut self,
+        tick: Tick,
+        current_pos: WorldPos,
+        view: &PerceptionView,
+        params: &AiParams,
+    ) -> AiIntent {
+        self.update_blackboard(current_pos, view, params);
+        self.transition(tick, current_pos, view, params);
         self.generate_intent(params)
     }
 
-    fn update_blackboard(&mut self, _tick: Tick, view: &PerceptionView, params: &AiParams) {
+    fn update_blackboard(
+        &mut self,
+        current_pos: WorldPos,
+        view: &PerceptionView,
+        params: &AiParams,
+    ) {
         // Target selection (SPEC.md section 63): score, sort descending,
         // EntityId tie-break, no RNG unless the definition asks for it.
-        if let Some(target) =
-            select_target(self.entity, self.blackboard.home_position, view, params)
-        {
+        if let Some(target) = select_target(self.entity, current_pos, view, params) {
             self.blackboard.current_target = Some(target.entity);
             self.blackboard.last_known_target_pos = Some(target.pos);
         }
     }
 
-    fn transition(&mut self, tick: Tick, view: &PerceptionView, params: &AiParams) {
+    fn transition(
+        &mut self,
+        tick: Tick,
+        current_pos: WorldPos,
+        view: &PerceptionView,
+        params: &AiParams,
+    ) {
         let home = self.blackboard.home_position;
         let previous = self.state;
         let target_pos = self.blackboard.last_known_target_pos;
@@ -139,7 +155,7 @@ impl AiAgent {
                 if view
                     .enemies
                     .iter()
-                    .any(|e| e.pos.dist2(home) <= params.aggro_radius * params.aggro_radius)
+                    .any(|e| e.pos.dist2(current_pos) <= params.aggro_radius * params.aggro_radius)
                 {
                     AiState::Chase
                 } else {
@@ -153,7 +169,7 @@ impl AiAgent {
                         .iter()
                         .find(|e| Some(e.entity) == self.blackboard.current_target)
                         .is_some_and(|e| {
-                            e.pos.dist2(pos) <= params.attack_range * params.attack_range
+                            e.pos.dist2(current_pos) <= params.attack_range * params.attack_range
                         });
                     if home.dist2(pos) > params.leash_radius * params.leash_radius {
                         AiState::Leash
@@ -173,14 +189,13 @@ impl AiAgent {
                 }
             }
             AiState::Leash => {
-                if self.blackboard.home_position.dist2(
-                    view.enemies
-                        .iter()
-                        .map(|e| e.pos)
-                        .min_by_key(|p| p.dist2(home))
-                        .unwrap_or(home),
-                ) <= params.aggro_radius * params.aggro_radius
-                {
+                let nearest = view
+                    .enemies
+                    .iter()
+                    .map(|e| e.pos)
+                    .min_by_key(|p| p.dist2(current_pos))
+                    .unwrap_or(home);
+                if current_pos.dist2(nearest) <= params.aggro_radius * params.aggro_radius {
                     AiState::Idle
                 } else {
                     AiState::Leash
@@ -235,4 +250,5 @@ pub fn select_target(
         .copied()
 }
 
+pub use brain::HfsmBrain;
 pub use packs::{ChampionModifier, ChampionProfile, FormationPolicy, MonsterPack, PackRole};

@@ -1,4 +1,5 @@
 pub mod actor;
+pub mod ai;
 pub mod command;
 pub mod damage;
 pub mod missile;
@@ -11,6 +12,7 @@ pub mod state;
 pub mod states;
 
 pub use actor::{ActionTiming, ActiveAction, Actor, InterruptPriority, Target};
+pub use ai::{AiBrain, AiCommand, AiWorldView};
 pub use command::{
     Admission, ClientCommand, CommandEnvelope, InteractIntent, MoveIntent, MovementMode,
     UseSkillIntent,
