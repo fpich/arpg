@@ -1,0 +1,14 @@
+[package]
+name = "arpg-data"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+arpg-core.workspace = true
+blake3.workspace = true
+serde.workspace = true
+postcard.workspace = true
+zstd.workspace = true
+thiserror.workspace = true

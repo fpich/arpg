@@ -1,0 +1,17 @@
+[package]
+name = "arpg-sim"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+arpg-world.workspace = true
+blake3.workspace = true
+arpg-core.workspace = true
+arpg-data.workspace = true
+arpg-rules.workspace = true
+serde.workspace = true
+smallvec.workspace = true
+thiserror.workspace = true
+arpg-persistence.workspace = true

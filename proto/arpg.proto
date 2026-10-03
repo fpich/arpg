@@ -1,0 +1,110 @@
+syntax = "proto3";
+
+package arpg.v1;
+
+// ---- Handshake (SPEC.md section 125) ----
+
+message ClientHello {
+  uint32 protocol_version = 1;
+  uint32 client_build = 2;
+  repeated string supported_features = 3;
+}
+
+message ServerHello {
+  uint32 protocol_version = 1;
+  uint32 server_build = 2;
+  bool accepted = 3;
+  string reject_reason = 4;
+}
+
+message JoinGameRequest {
+  bytes game_id = 1;
+  uint32 character_id = 2;
+}
+
+message JoinGameAccepted {
+  bytes game_id = 1;
+  uint32 player_id = 2;
+  uint32 player_slot = 3;
+  uint32 tick_rate = 4;
+  bytes ruleset_hash = 5;
+  bytes datapack_hash = 6;
+  uint64 server_tick = 7;
+  uint32 input_delay_ticks = 8;
+}
+
+// ---- Commands (sections 129-134) ----
+
+message CommandEnvelope {
+  uint32 sequence = 1;
+  uint64 client_tick = 2;
+  uint32 player_id = 3;
+  oneof command {
+    MoveCommand move = 4;
+    UseSkillCommand use_skill = 5;
+    NoOpCommand no_op = 6;
+    InteractCommand interact = 7;
+  }
+}
+
+message MoveCommand {
+  sint32 x = 1;
+  sint32 y = 2;
+  uint32 movement_mode = 3;
+}
+
+message UseSkillCommand {
+  uint32 skill_id = 1;
+  optional sint32 target_x = 2;
+  optional sint32 target_y = 3;
+}
+
+message NoOpCommand {}
+
+message InteractCommand {
+  uint64 object_id = 1;
+}
+
+message CommandAck {
+  uint32 player_id = 1;
+  uint32 last_processed_sequence = 2;
+  uint64 execute_tick = 3;
+  string admission = 4;
+}
+
+// ---- Replication (sections 137-143) ----
+
+message EntityDelta {
+  uint64 entity_id = 1;
+  uint64 base_revision = 2;
+  uint64 new_revision = 3;
+  uint32 field_mask = 4;
+  PlayerView player_view = 5;
+}
+
+message PlayerView {
+  uint32 player_id = 1;
+  sint32 x = 2;
+  sint32 y = 3;
+  sint64 life = 4;
+  sint64 mana = 5;
+}
+
+message EntityResyncRequest {
+  uint64 entity_id = 1;
+  uint64 client_revision = 2;
+}
+
+message Snapshot {
+  uint64 snapshot_id = 1;
+  uint64 tick = 2;
+  repeated PlayerView players = 3;
+  uint32 last_processed_command_sequence = 4;
+  repeated EntityDelta deltas = 5;
+}
+
+message EntityResyncResponse {
+  uint64 entity_id = 1;
+  uint64 server_revision = 2;
+  PlayerView player_view = 3;
+}
