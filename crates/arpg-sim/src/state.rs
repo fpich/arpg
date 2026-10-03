@@ -75,6 +75,11 @@ pub struct GameInstance {
     pub rules: Arc<arpg_rules::GameRules>,
     pub state: GameState,
     pub actors: BTreeMap<EntityId, crate::actor::Actor>,
+    /// IR skill registry (SPEC.md section 36). Data cannot depend on sim,
+    /// so full skill programs are registered on the instance.
+    pub skills: BTreeMap<arpg_core::SkillId, crate::skill::SkillDefinition>,
+    pub missiles: Vec<crate::missile::MissileInstance>,
+    next_missile_entity: u64,
     /// Active level; when None, movement applies without terrain collision
     /// (used by tests and headless instances without a generated world).
     pub level: Option<LevelInstance>,
@@ -102,6 +107,9 @@ impl GameInstance {
             rules,
             state: GameState::default(),
             actors: BTreeMap::new(),
+            skills: BTreeMap::new(),
+            missiles: Vec::new(),
+            next_missile_entity: 1 << 60,
             level: None,
             scheduler: Scheduler::new(),
             command_queue: CommandQueue::new(),
@@ -144,6 +152,17 @@ impl GameInstance {
         self.command_queue.push(envelope);
     }
 
+    /// Register an IR skill program; invalid skills are rejected (SPEC.md
+    /// section 37).
+    pub fn register_skill(
+        &mut self,
+        def: crate::skill::SkillDefinition,
+    ) -> Result<(), crate::skill::SkillValidationError> {
+        def.validate()?;
+        self.skills.insert(def.id, def);
+        Ok(())
+    }
+
     pub fn tick(&mut self) -> TickResult {
         self.state.tick = self.state.tick.next();
         let tick = self.state.tick;
@@ -174,6 +193,13 @@ impl GameInstance {
                 hash_input.extend_from_slice(&obj.cooldown_until.0.to_le_bytes());
             }
         }
+        for m in &self.missiles {
+            hash_input.extend_from_slice(&m.entity.0.to_le_bytes());
+            hash_input.extend_from_slice(&m.position.x.to_le_bytes());
+            hash_input.extend_from_slice(&m.position.y.to_le_bytes());
+            hash_input.extend_from_slice(&m.lifetime.to_le_bytes());
+            hash_input.extend_from_slice(&(m.hit_entities.len() as u64).to_le_bytes());
+        }
         for (id, actor) in &self.actors {
             hash_input.extend_from_slice(&id.0.to_le_bytes());
             hash_input.extend_from_slice(&(actor.mode as u8).to_le_bytes());
@@ -196,7 +222,7 @@ impl GameInstance {
     fn run_phase(
         &mut self,
         phase: Phase,
-        _tick: Tick,
+        tick: Tick,
         due: &[ScheduledCommand],
         _scheduled: &[ScheduledCommand],
     ) {
@@ -220,13 +246,19 @@ impl GameInstance {
                             .interact_intents
                             .insert(cmd.player, intent.target);
                     }
+                    ClientCommand::UseSkill(intent)
+                        if self.state.players.contains_key(&cmd.player) =>
+                    {
+                        self.start_cast(cmd.player, intent.skill, intent.target, tick);
+                    }
                     _ => {}
                 }
             }
         }
 
         if let Phase::ActionStateAdvance = phase {
-            self.advance_actions(_tick);
+            self.advance_actions(tick);
+            self.resolve_cast_impacts();
         }
 
         if let Phase::PendingDeathResolution = phase {
@@ -239,8 +271,16 @@ impl GameInstance {
         }
 
         if let Phase::InteractionResolution = phase {
-            self.resolve_interactions(_tick);
+            self.resolve_interactions(tick);
             self.state.interact_intents.clear();
+        }
+
+        if let Phase::MissileMovement = phase {
+            self.advance_missiles();
+        }
+
+        if let Phase::MissileCollision = phase {
+            self.resolve_missile_collisions();
         }
 
         if let Phase::WorldObjectUpdate = phase {
@@ -252,6 +292,222 @@ impl GameInstance {
                         obj.state = arpg_core::ObjectInstanceState::Default;
                     }
                 }
+            }
+        }
+    }
+
+    /// Start a Cast action for a player's skill (SPEC.md section 32).
+    fn start_cast(
+        &mut self,
+        player: PlayerId,
+        skill: arpg_core::SkillId,
+        target: Option<WorldPos>,
+        tick: Tick,
+    ) {
+        let timing = match self.skills.get(&skill) {
+            Some(def) => match def.timing {
+                crate::skill::TimingFormula::Ticks(t) => crate::actor::ActionTiming {
+                    windup_ticks: t,
+                    impact_tick: t,
+                    recovery_ticks: t,
+                },
+                crate::skill::TimingFormula::Instant => crate::actor::ActionTiming {
+                    windup_ticks: 1,
+                    impact_tick: 1,
+                    recovery_ticks: 0,
+                },
+            },
+            None => return,
+        };
+        let target_kind = match target {
+            Some(pos) => crate::actor::Target::Position(pos),
+            None => crate::actor::Target::None,
+        };
+        let entity = EntityId(player.0 as u64);
+        if let Some(actor) = self.actors.get_mut(&entity) {
+            actor.start_action(arpg_core::ActorMode::Cast, tick, target_kind, timing);
+            if let Some(a) = actor.action.as_mut() {
+                a.skill = Some(skill);
+            }
+        }
+    }
+
+    /// When a Cast action reaches Impact, execute its skill program
+    /// (SPEC.md sections 36, 46).
+    fn resolve_cast_impacts(&mut self) {
+        let mut outcomes: Vec<(EntityId, arpg_core::ActorMode, EntityId)> = Vec::new();
+        for (id, actor) in self.actors.iter_mut() {
+            if let Some(action) = &mut actor.action {
+                if actor.mode == arpg_core::ActorMode::Cast
+                    && action.phase == arpg_core::ActionPhase::Impact
+                {
+                    // re-arm so we don't fire twice
+                    action.phase = arpg_core::ActionPhase::Recovery;
+                    outcomes.push((*id, action.mode, *id));
+                }
+            }
+        }
+        for (caster, _, _) in outcomes {
+            self.execute_skill(caster);
+        }
+    }
+
+    /// Execute the skill program of a caster's pending cast.
+    fn execute_skill(&mut self, caster: EntityId) {
+        let Some(player_id) = self
+            .state
+            .players
+            .keys()
+            .find(|p| EntityId(p.0 as u64) == caster)
+            .copied()
+        else {
+            return;
+        };
+        let skill_id = {
+            let Some(actor) = self.actors.get(&caster) else {
+                return;
+            };
+            let Some(action) = &actor.action else {
+                return;
+            };
+            action.skill.unwrap_or(arpg_core::SkillId(0))
+        };
+        let Some(def) = self.skills.get(&skill_id).cloned() else {
+            return;
+        };
+        let target_pos = self
+            .actors
+            .get(&caster)
+            .and_then(|a| a.action.as_ref())
+            .and_then(|a| match a.target {
+                crate::actor::Target::Position(p) => Some(p),
+                _ => None,
+            });
+        let intent = crate::command::UseSkillIntent {
+            skill: skill_id,
+            target: target_pos,
+        };
+        let caster_pos = self
+            .state
+            .players
+            .get(&player_id)
+            .map(|p| p.pos)
+            .unwrap_or(WorldPos::ZERO);
+        let mut spawned: Vec<u32> = Vec::new();
+        let outcome = crate::skill::execute_program(&def.program, &intent, |m| spawned.push(m));
+        for def_id in spawned {
+            self.spawn_missile(def_id, caster, caster_pos, target_pos);
+        }
+        if outcome.damage != 0 || outcome.heal != 0 || outcome.mana_restored != 0 {
+            self.apply_skill_outcome(caster, target_pos, &outcome);
+        }
+    }
+
+    fn apply_skill_outcome(
+        &mut self,
+        caster: EntityId,
+        target_pos: Option<WorldPos>,
+        outcome: &crate::skill::SkillOutcome,
+    ) {
+        let target = target_pos.and_then(|pos| {
+            self.state
+                .players
+                .values()
+                .find(|p| p.pos == pos && EntityId(p.player.0 as u64) != caster)
+                .map(|p| EntityId(p.player.0 as u64))
+        });
+        if let Some(target) = target {
+            if outcome.damage != 0 {
+                self.apply_damage(target, caster, outcome.damage);
+            }
+            if outcome.heal != 0 {
+                if let Some(p) = self.state.players.get_mut(&PlayerId(target.0 as u32)) {
+                    p.life = p.life.saturating_add(outcome.heal);
+                }
+            }
+            if outcome.mana_restored != 0 {
+                if let Some(p) = self.state.players.get_mut(&PlayerId(target.0 as u32)) {
+                    p.mana = p.mana.saturating_add(outcome.mana_restored);
+                }
+            }
+        }
+    }
+
+    fn spawn_missile(
+        &mut self,
+        definition: u32,
+        owner: EntityId,
+        from: WorldPos,
+        to: Option<WorldPos>,
+    ) {
+        let velocity = match to {
+            Some(dest) => {
+                let dx = dest.x - from.x;
+                let dy = dest.y - from.y;
+                // one tile per tick toward the target, axis-aligned
+                arpg_core::FixedVec2 {
+                    x: dx.signum() * 256,
+                    y: dy.signum() * 256,
+                }
+            }
+            None => arpg_core::FixedVec2::ZERO,
+        };
+        self.next_missile_entity += 1;
+        self.missiles.push(crate::missile::MissileInstance {
+            entity: EntityId(self.next_missile_entity),
+            definition,
+            owner,
+            source_skill: None,
+            position: from,
+            velocity,
+            lifetime: 16,
+            movement: crate::missile::MissileMovement::Linear,
+            hit_entities: Vec::new(),
+            remaining_pierces: 0,
+        });
+    }
+
+    /// MissileMovement phase (SPEC.md section 57): move every missile; the
+    /// return of advance() marks expiry.
+    fn advance_missiles(&mut self) {
+        let mut expired = Vec::new();
+        for m in self.missiles.iter_mut() {
+            if m.advance() {
+                expired.push(m.entity);
+            }
+        }
+        self.missiles.retain(|m| !expired.contains(&m.entity));
+    }
+
+    /// MissileCollision phase (SPEC.md section 58): a missile overlapping a
+    /// player's tile hits it once.
+    fn resolve_missile_collisions(&mut self) {
+        let hits: Vec<(arpg_core::EntityId, arpg_core::EntityId)> = {
+            let mut hits = Vec::new();
+            for m in &self.missiles {
+                for p in self.state.players.values() {
+                    let target = EntityId(p.player.0 as u64);
+                    if target != m.owner && m.hits_at(p.pos, 256) {
+                        hits.push((m.entity, target));
+                    }
+                }
+            }
+            hits
+        };
+        for (missile_entity, target) in hits {
+            let damage = 10i64;
+            let Some(idx) = self
+                .missiles
+                .iter()
+                .position(|m| m.entity == missile_entity)
+            else {
+                continue;
+            };
+            let destroyed = self.missiles[idx].register_hit(target);
+            if destroyed {
+                let owner = self.missiles[idx].owner;
+                self.missiles.remove(idx);
+                self.apply_damage(target, owner, damage);
             }
         }
     }

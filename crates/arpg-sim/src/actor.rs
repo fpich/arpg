@@ -44,6 +44,8 @@ pub enum Target {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ActiveAction {
     pub id: u64,
+    /// Skill reference when the action is a Cast (SPEC.md section 32).
+    pub skill: Option<arpg_core::SkillId>,
     pub mode: ActorMode,
     pub start_tick: Tick,
     pub phase: ActionPhase,
@@ -62,6 +64,7 @@ impl ActiveAction {
     ) -> ActiveAction {
         ActiveAction {
             id,
+            skill: None,
             mode,
             start_tick,
             phase: ActionPhase::Windup,
