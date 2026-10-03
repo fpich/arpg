@@ -136,6 +136,7 @@ version = "0.1.0"
 dependencies = [
  "arpg-core",
  "arpg-sim",
+ "blake3",
 ]
 
 [[package]]

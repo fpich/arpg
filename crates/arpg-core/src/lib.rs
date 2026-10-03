@@ -1,3 +1,4 @@
+pub mod collision;
 pub mod error;
 pub mod event_buffer;
 pub mod events;
@@ -8,6 +9,7 @@ pub mod rng;
 pub mod tick;
 pub mod world;
 
+pub use collision::CollisionMap;
 pub use error::GameError;
 pub use event_buffer::EventBuffer;
 pub use events::{ActionPhase, ActorMode, EventOrderKey, GameEvent, Lifecycle, SpawnMetadata};

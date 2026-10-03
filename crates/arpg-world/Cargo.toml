@@ -7,4 +7,5 @@ license.workspace = true
 
 [dependencies]
 arpg-core.workspace = true
+blake3.workspace = true
 arpg-sim.workspace = true
