@@ -1,5 +1,6 @@
 pub mod bridge;
 pub mod quic;
+pub mod ratelimit;
 pub mod session;
 
 pub use session::{Session, SessionState, PROTOCOL_VERSION};
