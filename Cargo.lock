@@ -51,6 +51,7 @@ name = "arpg-data"
 version = "0.1.0"
 dependencies = [
  "arpg-core",
+ "blake3",
  "postcard",
  "serde",
  "thiserror 1.0.69",
