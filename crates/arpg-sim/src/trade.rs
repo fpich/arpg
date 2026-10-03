@@ -100,6 +100,15 @@ impl Trade {
     }
 }
 
+/// The validated exchange payload applied by `apply_mutations`.
+#[derive(Debug, Clone)]
+struct Exchange {
+    a: PlayerId,
+    b: PlayerId,
+    offer_a: TradeOffer,
+    offer_b: TradeOffer,
+}
+
 /// Trade manager: owns open trades and drives the commit pipeline.
 #[derive(Debug, Default)]
 pub struct TradeSystem {
@@ -261,8 +270,13 @@ impl TradeSystem {
         // -- apply in-memory mutations --
         let mut applied: Vec<(ItemId, ItemLocation, ItemLocation)> = Vec::new();
         let gold_before = (economy.gold_of(a), economy.gold_of(b));
-        let result =
-            self.apply_mutations(economy, inventory, a, b, &offer_a, &offer_b, &mut applied);
+        let exchange = Exchange {
+            a,
+            b,
+            offer_a: offer_a.clone(),
+            offer_b: offer_b.clone(),
+        };
+        let result = self.apply_mutations(economy, inventory, &exchange, &mut applied);
         if let Err(e) = result {
             self.rollback_mutations(economy, inventory, a, b, &mut applied, gold_before);
             let _ = store.rollback(id);
@@ -312,12 +326,11 @@ impl TradeSystem {
         &mut self,
         economy: &mut Economy,
         inventory: &mut InventorySystem,
-        a: PlayerId,
-        b: PlayerId,
-        offer_a: &TradeOffer,
-        offer_b: &TradeOffer,
+        exchange: &Exchange,
         applied: &mut Vec<(ItemId, ItemLocation, ItemLocation)>,
     ) -> Result<(), TradeError> {
+        let (a, b, offer_a, offer_b) =
+            (exchange.a, exchange.b, &exchange.offer_a, &exchange.offer_b);
         // gold exchange
         let ga = economy.gold_of(a);
         if offer_a.gold > ga.carried {
