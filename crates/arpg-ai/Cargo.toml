@@ -1,0 +1,11 @@
+[package]
+name = "arpg-ai"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+arpg-core.workspace = true
+arpg-world.workspace = true
+arpg-sim.workspace = true

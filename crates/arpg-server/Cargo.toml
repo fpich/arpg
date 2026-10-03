@@ -1,0 +1,13 @@
+[package]
+name = "arpg-server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+arpg-core.workspace = true
+arpg-sim.workspace = true
+arpg-protocol.workspace = true
+arpg-persistence.workspace = true
+tokio.workspace = true
