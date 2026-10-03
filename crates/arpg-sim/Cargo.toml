@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+arpg-world.workspace = true
 arpg-core.workspace = true
 arpg-data.workspace = true
 arpg-rules.workspace = true

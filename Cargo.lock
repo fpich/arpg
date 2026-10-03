@@ -116,6 +116,7 @@ dependencies = [
  "arpg-core",
  "arpg-data",
  "arpg-rules",
+ "arpg-world",
  "serde",
  "smallvec",
  "thiserror 1.0.69",
@@ -135,7 +136,6 @@ name = "arpg-world"
 version = "0.1.0"
 dependencies = [
  "arpg-core",
- "arpg-sim",
  "blake3",
 ]
 

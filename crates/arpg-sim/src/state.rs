@@ -3,6 +3,7 @@ use crate::phase::Phase;
 use crate::replication::ReplicationTracker;
 use crate::scheduler::{CommandQueue, ScheduledCommand, Scheduler, DEFAULT_INPUT_DELAY_TICKS};
 use arpg_core::{EntityId, EventBuffer, EventOrderKey, GameEvent, PlayerId, Tick, WorldPos};
+use arpg_world::LevelInstance;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -26,6 +27,9 @@ pub struct PlayerState {
 pub struct GameState {
     pub tick: Tick,
     pub players: BTreeMap<PlayerId, PlayerState>,
+    /// Desired movement targets recorded during UpdatePlayerIntent and
+    /// consumed during MovementResolution (SPEC.md section 25).
+    pub movement_intents: BTreeMap<PlayerId, WorldPos>,
     pub entities_alive: u64,
     pub attack_sequence: u64,
     pub ai_decision_sequence: u64,
@@ -69,6 +73,9 @@ pub struct GameInstance {
     pub data: Arc<arpg_data::GameData>,
     pub rules: Arc<arpg_rules::GameRules>,
     pub state: GameState,
+    /// Active level; when None, movement applies without terrain collision
+    /// (used by tests and headless instances without a generated world).
+    pub level: Option<LevelInstance>,
     scheduler: Scheduler,
     command_queue: CommandQueue,
     event_buffer: EventBuffer,
@@ -92,6 +99,7 @@ impl GameInstance {
             data,
             rules,
             state: GameState::default(),
+            level: None,
             scheduler: Scheduler::new(),
             command_queue: CommandQueue::new(),
             event_buffer: EventBuffer::new(),
@@ -172,9 +180,10 @@ impl GameInstance {
         if let Phase::UpdatePlayerIntent = phase {
             for cmd in due {
                 if let ClientCommand::Move(intent) = &cmd.envelope.command {
-                    if let Some(p) = self.state.players.get_mut(&cmd.player) {
-                        p.pos = intent.direction;
-                        let _ = self.replication.touch(cmd.player);
+                    if self.state.players.contains_key(&cmd.player) {
+                        self.state
+                            .movement_intents
+                            .insert(cmd.player, intent.direction);
                         let key = self.next_event_key(arpg_core::EntityId(cmd.player.0 as u64));
                         self.event_buffer.emit(
                             key,
@@ -183,6 +192,53 @@ impl GameInstance {
                     }
                 }
             }
+        }
+
+        if let Phase::MovementResolution = phase {
+            self.resolve_movement();
+            self.state.movement_intents.clear();
+        }
+    }
+
+    /// Movement resolution pipeline (SPEC.md sections 25-26): desired target,
+    /// terrain collision against the level, then entity collision. Movers are
+    /// processed in canonical EntityId order; the first mover into a tile wins
+    /// and simultaneous contenders are blocked.
+    fn resolve_movement(&mut self) {
+        if self.state.movement_intents.is_empty() {
+            return;
+        }
+        let mut moved: Vec<PlayerId> = Vec::new();
+        for (&player, &target) in self.state.movement_intents.iter() {
+            let Some(p) = self.state.players.get(&player) else {
+                continue;
+            };
+            let from = p.pos;
+            if from == target {
+                continue;
+            }
+            if let Some(level) = &self.level {
+                if !level.walkable_at(target) {
+                    continue;
+                }
+            }
+            let target_tile = target.tile();
+            let occupied = self
+                .state
+                .players
+                .values()
+                .any(|other| other.player != player && other.pos.tile() == target_tile);
+            if occupied {
+                continue;
+            }
+            let Some(p) = self.state.players.get_mut(&player) else {
+                continue;
+            };
+            p.pos = target;
+            moved.push(player);
+        }
+        for player in moved {
+            let _ = self.replication.touch(player);
         }
     }
 }
