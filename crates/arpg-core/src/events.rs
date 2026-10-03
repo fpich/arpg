@@ -79,6 +79,7 @@ pub enum ActorMode {
     Dead,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActionPhase {
     Windup,
     Impact,

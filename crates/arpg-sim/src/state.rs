@@ -74,6 +74,7 @@ pub struct GameInstance {
     pub data: Arc<arpg_data::GameData>,
     pub rules: Arc<arpg_rules::GameRules>,
     pub state: GameState,
+    pub actors: BTreeMap<EntityId, crate::actor::Actor>,
     /// Active level; when None, movement applies without terrain collision
     /// (used by tests and headless instances without a generated world).
     pub level: Option<LevelInstance>,
@@ -100,6 +101,7 @@ impl GameInstance {
             data,
             rules,
             state: GameState::default(),
+            actors: BTreeMap::new(),
             level: None,
             scheduler: Scheduler::new(),
             command_queue: CommandQueue::new(),
@@ -117,6 +119,10 @@ impl GameInstance {
                 life: 100,
                 mana: 50,
             },
+        );
+        self.actors.insert(
+            EntityId(player.0 as u64),
+            crate::actor::Actor::new(EntityId(player.0 as u64)),
         );
         let key = self.next_event_key(EntityId(player.0 as u64));
         self.event_buffer.emit(key, GameEvent::PlayerJoined(player));
@@ -168,6 +174,15 @@ impl GameInstance {
                 hash_input.extend_from_slice(&obj.cooldown_until.0.to_le_bytes());
             }
         }
+        for (id, actor) in &self.actors {
+            hash_input.extend_from_slice(&id.0.to_le_bytes());
+            hash_input.extend_from_slice(&(actor.mode as u8).to_le_bytes());
+            hash_input.extend_from_slice(&(actor.lifecycle as u8).to_le_bytes());
+            if let Some(action) = &actor.action {
+                hash_input.extend_from_slice(&action.id.to_le_bytes());
+                hash_input.extend_from_slice(&(action.phase as u8).to_le_bytes());
+            }
+        }
         hash_input.extend_from_slice(&self.scheduler.canonical_hash_input());
         let state_hash = arpg_core::hash::state_hash(&hash_input);
 
@@ -210,6 +225,14 @@ impl GameInstance {
             }
         }
 
+        if let Phase::ActionStateAdvance = phase {
+            self.advance_actions(_tick);
+        }
+
+        if let Phase::PendingDeathResolution = phase {
+            self.resolve_pending_deaths();
+        }
+
         if let Phase::MovementResolution = phase {
             self.resolve_movement();
             self.state.movement_intents.clear();
@@ -230,6 +253,110 @@ impl GameInstance {
                     }
                 }
             }
+        }
+    }
+
+    /// Advance every in-flight action by one phase step (SPEC.md sections
+    /// 32-33). Completed actions return the actor to Neutral unless an
+    /// interruption was scheduled.
+    fn advance_actions(&mut self, tick: arpg_core::Tick) {
+        let mut completed: Vec<EntityId> = Vec::new();
+        let mut interrupted: Vec<(EntityId, arpg_core::ActorMode)> = Vec::new();
+        let mut resolved: Vec<EntityId> = Vec::new();
+        for (id, actor) in self.actors.iter_mut() {
+            if let Some(action) = &mut actor.action {
+                if action.phase == arpg_core::ActionPhase::Impact {
+                    resolved.push(*id);
+                }
+                if action.advance(tick) {
+                    completed.push(*id);
+                } else if action.pending_interrupt.is_some() {
+                    if let Some(mode) = action.apply_interrupt() {
+                        interrupted.push((*id, mode));
+                    }
+                }
+            }
+        }
+        for id in resolved {
+            let key = self.next_event_key(id);
+            self.event_buffer.emit(key, GameEvent::ActionResolved(id));
+        }
+        for id in completed {
+            if let Some(actor) = self.actors.get_mut(&id) {
+                actor.action = None;
+                if actor.mode != arpg_core::ActorMode::Dead {
+                    actor.mode = arpg_core::ActorMode::Neutral;
+                }
+            }
+        }
+        for (id, mode) in interrupted {
+            if let Some(actor) = self.actors.get_mut(&id) {
+                actor.mode = mode;
+            }
+        }
+    }
+
+    /// PendingDeath -> Dead (SPEC.md section 13) with kill credit (section
+    /// 14): the killer is the source of the first ordered event that brought
+    /// life to <= 0.
+    fn resolve_pending_deaths(&mut self) {
+        let dead: Vec<EntityId> = self
+            .actors
+            .iter()
+            .filter(|(_, a)| a.lifecycle == arpg_core::Lifecycle::PendingDeath)
+            .map(|(id, _)| *id)
+            .collect();
+        for id in dead {
+            if let Some(actor) = self.actors.get_mut(&id) {
+                actor.lifecycle = arpg_core::Lifecycle::Dead;
+                actor.mode = arpg_core::ActorMode::Dead;
+                actor.action = None;
+            }
+            let key = self.next_event_key(id);
+            self.event_buffer.emit(key, GameEvent::EntityRemoved(id));
+        }
+    }
+
+    /// Mark an entity as PendingDeath (SPEC.md section 13) with kill credit.
+    pub fn apply_damage(&mut self, target: EntityId, source: EntityId, amount: i64) {
+        let Some(player_id) = self
+            .state
+            .players
+            .keys()
+            .find(|p| EntityId(p.0 as u64) == target)
+            .copied()
+        else {
+            return;
+        };
+        let Some(p) = self.state.players.get_mut(&player_id) else {
+            return;
+        };
+        let was_alive = p.life > 0;
+        p.life = p.life.saturating_sub(amount);
+        let now_dead = p.life <= 0;
+        if let Some(actor) = self.actors.get_mut(&target) {
+            if now_dead && actor.lifecycle == arpg_core::Lifecycle::Alive {
+                actor.lifecycle = arpg_core::Lifecycle::PendingDeath;
+            }
+        }
+        let key = self.next_event_key(source);
+        self.event_buffer.emit(
+            key,
+            GameEvent::DamageApplied {
+                target,
+                source,
+                amount,
+            },
+        );
+        if was_alive && now_dead {
+            let key = self.next_event_key(source);
+            self.event_buffer.emit(
+                key,
+                GameEvent::EntityKilled {
+                    target,
+                    killer: source,
+                },
+            );
         }
     }
 
