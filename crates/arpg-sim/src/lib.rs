@@ -8,6 +8,7 @@ pub mod item;
 pub mod loot;
 pub mod missile;
 pub mod phase;
+pub mod quest;
 pub mod replication;
 pub mod scheduler;
 pub mod skill;
@@ -37,6 +38,12 @@ pub use item::{
 pub use loot::LootRoller;
 pub use missile::{MissileInstance, MissileMovement};
 pub use phase::{Phase, PHASES, PHASE_ORDER};
+pub use quest::{
+    AreaId, CharacterQuestState, DifficultyId, GameQuestState, Portal, PortalError, PortalSystem,
+    QuestAccess, QuestAction, QuestCondition, QuestDefId, QuestDefinition, QuestError, QuestEvent,
+    QuestObjective, QuestOutcome, QuestRule, QuestStatus, QuestSystem, QuestTrigger, WaypointId,
+    WaypointState,
+};
 pub use replication::{build_client_replication, ClientReplication, ReplicationTracker};
 pub use scheduler::{CommandQueue, ScheduledCommand, Scheduler, DEFAULT_INPUT_DELAY_TICKS};
 pub use skill::{

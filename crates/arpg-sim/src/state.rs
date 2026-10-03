@@ -114,6 +114,15 @@ pub struct GameInstance {
     monster_move_intents: BTreeMap<EntityId, WorldPos>,
     pub ai_brain: Option<Box<dyn crate::ai::AiBrain>>,
     next_monster_entity: u64,
+    /// Quest system: definitions + game/character states (SPEC.md 101-106).
+    pub quests: crate::quest::QuestSystem,
+    /// Waypoints unlocked per character x difficulty (SPEC.md section 107).
+    pub waypoints: crate::quest::WaypointState,
+    /// Town portals opened in this game (SPEC.md section 108).
+    pub portals: crate::quest::PortalSystem,
+    /// Quest events queued during earlier phases, consumed by
+    /// QuestResolution (SPEC.md section 8 intra-tick visibility).
+    pending_quest_events: Vec<crate::quest::QuestEvent>,
     /// Active level; when None, movement applies without terrain collision
     /// (used by tests and headless instances without a generated world).
     pub level: Option<LevelInstance>,
@@ -155,6 +164,10 @@ impl GameInstance {
             monster_move_intents: BTreeMap::new(),
             ai_brain: None,
             next_monster_entity: 2 << 40,
+            quests: crate::quest::QuestSystem::new(),
+            waypoints: crate::quest::WaypointState::default(),
+            portals: crate::quest::PortalSystem::new(),
+            pending_quest_events: Vec::new(),
             level: None,
             scheduler: Scheduler::new(),
             command_queue: CommandQueue::new(),
@@ -416,6 +429,9 @@ impl GameInstance {
             self.resolve_loot();
         }
 
+        if let Phase::QuestResolution = phase {
+            self.resolve_quests();
+        }
         if let Phase::Expiration = phase {
             self.resolve_expiration();
         }
@@ -870,6 +886,10 @@ impl GameInstance {
                     killer: source,
                 },
             );
+            self.queue_quest_event(
+                crate::quest::QuestTrigger::MonsterKilled(arpg_core::MonsterDefId(0)),
+                source,
+            );
         }
     }
 
@@ -920,6 +940,56 @@ impl GameInstance {
             self.inventory.remove(id);
             self.state.expired_items += 1;
         }
+    }
+
+    /// Queue a quest event raised by gameplay; evaluated during
+    /// QuestResolution (SPEC.md sections 8, 22).
+    pub fn queue_quest_event(&mut self, trigger: crate::quest::QuestTrigger, source: EntityId) {
+        let owner = self
+            .state
+            .players
+            .keys()
+            .find(|p| EntityId(p.0 as u64) == source)
+            .copied();
+        let eligible: Vec<PlayerId> = self.state.players.keys().copied().collect();
+        self.pending_quest_events.push(crate::quest::QuestEvent {
+            trigger,
+            owner,
+            eligible,
+        });
+    }
+
+    /// QuestResolution phase (SPEC.md section 22): evaluate queued events,
+    /// apply outcomes, clear the per-tick guard.
+    fn resolve_quests(&mut self) {
+        let events = std::mem::take(&mut self.pending_quest_events);
+        for event in events {
+            if let Ok(outcome) = self.quests.evaluate(&event) {
+                for (player, wp) in outcome.waypoints_unlocked {
+                    self.waypoints.unlock(
+                        player,
+                        self.quests
+                            .active_difficulty
+                            .unwrap_or(crate::quest::DifficultyId(0)),
+                        wp,
+                    );
+                }
+                for (player, area) in outcome.areas_unlocked {
+                    let _ = (player, area);
+                }
+                for (owner, dest) in outcome.portals {
+                    self.portals.open(crate::quest::Portal {
+                        owner,
+                        source: crate::quest::AreaId(0),
+                        destination: dest,
+                        access: crate::quest::QuestAccess::Party,
+                        created_tick: self.state.tick.0,
+                        expires_tick: Some(self.state.tick.0 + 30 * 25 * 60),
+                    });
+                }
+            }
+        }
+        self.quests.end_tick();
     }
 
     /// Client pickup: validated and applied during InventoryTransactions
