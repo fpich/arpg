@@ -8,6 +8,9 @@
 use arpg_core::{ItemId, PlayerId};
 
 pub mod snapshot;
+
+#[cfg(feature = "sqlite")]
+pub mod sqlite;
 use std::collections::BTreeMap;
 
 pub use snapshot::{
