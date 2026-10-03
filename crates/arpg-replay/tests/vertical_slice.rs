@@ -121,6 +121,7 @@ fn loot_trade_save_reconnect_roundtrip() {
         stash_gold: 0,
         quests: Default::default(),
         waypoints: Default::default(),
+        hireling: None,
     };
     let rev = repo.save(PlayerId(1), snapshot.clone());
     assert_eq!(rev, 1);

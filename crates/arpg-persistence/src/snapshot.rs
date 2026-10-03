@@ -37,6 +37,18 @@ pub struct PersistentWaypoints {
     pub unlocked: BTreeMap<u32, Vec<u32>>,
 }
 
+/// Hireling snapshot (SPEC.md sections 67, 120): hirelings persist with
+/// the character, including experience, death state and persistent
+/// equipment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HirelingSnapshot {
+    pub experience: u64,
+    pub dead: bool,
+    pub revive_cost: u64,
+    /// Persistent hireling equipment (one item per slot).
+    pub equipment: Vec<PersistentItem>,
+}
+
 /// Character snapshot (SPEC.md section 120).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CharacterSnapshot {
@@ -50,6 +62,7 @@ pub struct CharacterSnapshot {
     pub stash_gold: u64,
     pub quests: PersistentQuestState,
     pub waypoints: PersistentWaypoints,
+    pub hireling: Option<HirelingSnapshot>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -121,6 +134,16 @@ mod tests {
             waypoints: PersistentWaypoints {
                 unlocked: BTreeMap::from([(0u32, vec![1, 2, 3])]),
             },
+            hireling: Some(HirelingSnapshot {
+                experience: 950,
+                dead: false,
+                revive_cost: 750,
+                equipment: vec![PersistentItem {
+                    id: ItemId(9),
+                    definition: 12,
+                    location: PersistentItemLocation::Equipment { slot: 0 },
+                }],
+            }),
         }
     }
 
@@ -137,6 +160,32 @@ mod tests {
         assert_eq!(loaded.revision, 2);
         assert_eq!(loaded.level, 12);
         assert_eq!(loaded.carried_gold, 500);
+        let hireling = loaded.hireling.as_ref().unwrap();
+        assert_eq!(hireling.experience, 950);
+        assert_eq!(hireling.equipment.len(), 1);
+    }
+
+    #[test]
+    fn hireling_is_optional_and_round_trips() {
+        let mut repo = CharacterRepository::new();
+        let p = PlayerId(2);
+        let mut s = snapshot();
+        s.hireling = None;
+        repo.save(p, s.clone());
+        let loaded = repo.load(p).unwrap().unwrap();
+        assert!(loaded.hireling.is_none());
+        let mut s = snapshot();
+        s.hireling.as_mut().unwrap().dead = true;
+        repo.save(p, s);
+        assert!(
+            repo.load(p)
+                .unwrap()
+                .unwrap()
+                .hireling
+                .clone()
+                .unwrap()
+                .dead
+        );
     }
 
     #[test]

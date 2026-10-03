@@ -13,6 +13,7 @@ pub mod replication;
 pub mod scheduler;
 pub mod skill;
 pub mod social;
+pub mod socket;
 pub mod stat;
 pub mod state;
 pub mod states;

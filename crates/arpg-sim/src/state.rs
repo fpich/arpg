@@ -140,6 +140,8 @@ pub struct GameInstance {
     pub hostility: crate::social::HostilityMatrix,
     /// Summons and hirelings (SPEC.md sections 66-67).
     pub summons: crate::summon::SummonSystem,
+    /// Sockets, runes and runewords (SPEC.md sections 76, 193, 199).
+    pub sockets: crate::socket::SocketSystem,
     /// XP pipeline configuration (SPEC.md section 110).
     pub xp_pipeline: crate::social::XpPipeline,
 }
@@ -188,6 +190,7 @@ impl GameInstance {
             parties: crate::social::PartySystem::new(),
             hostility: crate::social::HostilityMatrix::default(),
             summons: crate::summon::SummonSystem::new(),
+            sockets: crate::socket::SocketSystem::new(),
             xp_pipeline: crate::social::XpPipeline::D2_LIKE,
         }
     }
@@ -372,6 +375,7 @@ impl GameInstance {
         self.parties.hash_bytes(&mut hash_input);
         self.hostility.hash_bytes(&mut hash_input);
         self.summons.hash_bytes(&mut hash_input);
+        self.sockets.hash_bytes(&mut hash_input);
         let state_hash = arpg_core::hash::state_hash(&hash_input);
 
         TickResult {
