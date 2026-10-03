@@ -14,3 +14,4 @@ arpg-rules.workspace = true
 serde.workspace = true
 smallvec.workspace = true
 thiserror.workspace = true
+arpg-persistence.workspace = true

@@ -129,12 +129,17 @@ impl TreasureClass {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum ItemError {
+    #[error("invalid treasure class: {0}")]
     InvalidTreasureClass(&'static str),
+    #[error("invalid transaction: {0}")]
     TransactionInvalid(&'static str),
+    #[error("item unavailable")]
     ItemUnavailable,
+    #[error("slot occupied")]
     SlotOccupied,
+    #[error("requirement not met")]
     RequirementNotMet,
 }
 
