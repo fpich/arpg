@@ -2,6 +2,9 @@ pub mod actor;
 pub mod ai;
 pub mod command;
 pub mod damage;
+pub mod inventory;
+pub mod item;
+pub mod loot;
 pub mod missile;
 pub mod phase;
 pub mod replication;
@@ -20,6 +23,12 @@ pub use command::{
 pub use damage::{
     DamagePacket, DamageRange, DotAccumulator, PoisonPayload, Resistances, RollAmounts,
 };
+pub use inventory::InventorySystem;
+pub use item::{
+    EquipmentSlot, GridPos, ItemError, ItemInstance, ItemLocation, ItemQuality, StashPos,
+    TreasureClass, TreasureKind, WeightedTreasureEntry,
+};
+pub use loot::LootRoller;
 pub use missile::{MissileInstance, MissileMovement};
 pub use phase::{Phase, PHASES, PHASE_ORDER};
 pub use replication::{build_client_replication, ClientReplication, ReplicationTracker};

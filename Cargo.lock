@@ -119,6 +119,7 @@ dependencies = [
  "arpg-data",
  "arpg-rules",
  "arpg-world",
+ "blake3",
  "serde",
  "smallvec",
  "thiserror 1.0.69",
