@@ -11,6 +11,7 @@
 
 pub mod chaos;
 pub mod corpus;
+pub mod load;
 
 use arpg_core::{PlayerId, Tick, WorldPos};
 use arpg_sim::ClientCommand::NoOp;
