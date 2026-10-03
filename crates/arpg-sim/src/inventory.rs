@@ -48,6 +48,16 @@ impl InventorySystem {
     pub fn location(&self, id: ItemId) -> Option<ItemLocation> {
         self.locations.get(&id).copied()
     }
+    /// Remove an item entirely (expired ground item, SPEC.md section 88).
+    pub fn remove(&mut self, id: ItemId) -> Option<ItemInstance> {
+        let loc = self.locations.remove(&id)?;
+        self.slot_owner.remove(&slot_key(loc));
+        self.items.remove(&id)
+    }
+    /// Deterministic iteration over item locations for state hashing.
+    pub fn iter_locations(&self) -> impl Iterator<Item = (ItemId, &ItemLocation)> {
+        self.locations.iter().map(|(id, loc)| (*id, loc))
+    }
 
     /// Deterministic drop on the ground (SPEC.md section 84).
     pub fn spawn_ground(

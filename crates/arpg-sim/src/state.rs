@@ -1,4 +1,5 @@
 use crate::command::{Admission, ClientCommand, CommandEnvelope};
+use crate::item::ItemLocation;
 use crate::phase::Phase;
 use crate::replication::ReplicationTracker;
 use crate::scheduler::{CommandQueue, ScheduledCommand, Scheduler, DEFAULT_INPUT_DELAY_TICKS};
@@ -25,11 +26,13 @@ pub struct PlayerState {
 
 /// A monster in the world: position, life, lifecycle-able target of
 /// combat. Monsters are driven by the AI brain.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MonsterState {
     pub entity: EntityId,
     pub pos: WorldPos,
     pub life: i64,
+    /// Loot table dropped on death (SPEC.md sections 71-72).
+    pub treasure_class: Option<crate::item::TreasureClass>,
 }
 
 #[derive(Debug, Default)]
@@ -47,9 +50,15 @@ pub struct GameState {
     pub death_sequence: u64,
     pub merchant_refresh_sequence: u64,
     pub event_sequence: u64,
+    pub expired_items: u64,
+    pub game_seed: [u8; 32],
 }
 
 impl GameState {
+    pub fn seed(&self) -> [u8; 32] {
+        self.game_seed
+    }
+
     pub fn canonical_hash_input(&self) -> Vec<u8> {
         let mut buf = Vec::new();
         buf.extend_from_slice(&self.tick.0.to_le_bytes());
@@ -90,6 +99,18 @@ pub struct GameInstance {
     pub missiles: Vec<crate::missile::MissileInstance>,
     next_missile_entity: u64,
     pub monsters: BTreeMap<EntityId, MonsterState>,
+    pub inventory: crate::inventory::InventorySystem,
+    pub loot_roller: crate::loot::LootRoller,
+    /// Drops queued by PendingDeathResolution, consumed by LootResolution.
+    pending_drops: Vec<(
+        EntityId,
+        WorldPos,
+        [u8; 32],
+        u16,
+        crate::item::TreasureClass,
+    )>,
+    /// Born-tick of each ground item for expiration (SPEC.md section 88).
+    ground_spawn_ticks: BTreeMap<arpg_core::ItemId, u64>,
     monster_move_intents: BTreeMap<EntityId, WorldPos>,
     pub ai_brain: Option<Box<dyn crate::ai::AiBrain>>,
     next_monster_entity: u64,
@@ -114,16 +135,23 @@ impl GameInstance {
         rules: Arc<arpg_rules::GameRules>,
         seed: RootSeed,
     ) -> GameInstance {
-        let _ = seed;
+        let game_seed = seed;
         GameInstance {
             data,
             rules,
-            state: GameState::default(),
+            state: GameState {
+                game_seed,
+                ..GameState::default()
+            },
             actors: BTreeMap::new(),
             skills: BTreeMap::new(),
             missiles: Vec::new(),
             next_missile_entity: 1 << 60,
             monsters: BTreeMap::new(),
+            inventory: crate::inventory::InventorySystem::new(),
+            loot_roller: crate::loot::LootRoller::new(),
+            pending_drops: Vec::new(),
+            ground_spawn_ticks: BTreeMap::new(),
             monster_move_intents: BTreeMap::new(),
             ai_brain: None,
             next_monster_entity: 2 << 40,
@@ -187,6 +215,14 @@ impl GameInstance {
 
     /// Spawn a monster and notify the brain (SPEC.md section 60).
     pub fn spawn_monster(&mut self, home: WorldPos) -> EntityId {
+        self.spawn_monster_with_tc(home, None)
+    }
+
+    pub fn spawn_monster_with_tc(
+        &mut self,
+        home: WorldPos,
+        treasure_class: Option<crate::item::TreasureClass>,
+    ) -> EntityId {
         self.next_monster_entity += 1;
         let entity = EntityId(self.next_monster_entity);
         self.monsters.insert(
@@ -195,6 +231,7 @@ impl GameInstance {
                 entity,
                 pos: home,
                 life: 50,
+                treasure_class,
             },
         );
         self.actors.insert(entity, crate::actor::Actor::new(entity));
@@ -259,6 +296,47 @@ impl GameInstance {
                 hash_input.extend_from_slice(&(action.phase as u8).to_le_bytes());
             }
         }
+        for (id, loc) in self.inventory.iter_locations() {
+            hash_input.extend_from_slice(&id.0.to_le_bytes());
+            match loc {
+                ItemLocation::PlayerInventory(p, g) => {
+                    hash_input.extend_from_slice(&p.0.to_le_bytes());
+                    hash_input.push(0);
+                    hash_input.push(g.x);
+                    hash_input.push(g.y);
+                }
+                ItemLocation::Equipment(p, s) => {
+                    hash_input.extend_from_slice(&p.0.to_le_bytes());
+                    hash_input.push(1);
+                    hash_input.push(*s as u8);
+                }
+                ItemLocation::Belt(p, s) => {
+                    hash_input.extend_from_slice(&p.0.to_le_bytes());
+                    hash_input.push(2);
+                    hash_input.push(*s);
+                }
+                ItemLocation::Stash(p, s) => {
+                    hash_input.extend_from_slice(&p.0.to_le_bytes());
+                    hash_input.push(3);
+                    hash_input.extend_from_slice(&s.page.to_le_bytes());
+                    hash_input.push(s.x);
+                    hash_input.push(s.y);
+                }
+                ItemLocation::Cube(p, g) => {
+                    hash_input.extend_from_slice(&p.0.to_le_bytes());
+                    hash_input.push(4);
+                    hash_input.push(g.x);
+                    hash_input.push(g.y);
+                }
+                ItemLocation::Ground(l, pos) => {
+                    hash_input.extend_from_slice(&l.0.to_le_bytes());
+                    hash_input.push(5);
+                    hash_input.extend_from_slice(&pos.x.to_le_bytes());
+                    hash_input.extend_from_slice(&pos.y.to_le_bytes());
+                }
+            }
+        }
+        hash_input.extend_from_slice(&self.state.expired_items.to_le_bytes());
         hash_input.extend_from_slice(&self.scheduler.canonical_hash_input());
         let state_hash = arpg_core::hash::state_hash(&hash_input);
 
@@ -332,6 +410,14 @@ impl GameInstance {
         if let Phase::InteractionResolution = phase {
             self.resolve_interactions(tick);
             self.state.interact_intents.clear();
+        }
+
+        if let Phase::LootResolution = phase {
+            self.resolve_loot();
+        }
+
+        if let Phase::Expiration = phase {
+            self.resolve_expiration();
         }
 
         if let Phase::MissileMovement = phase {
@@ -735,13 +821,129 @@ impl GameInstance {
                 actor.mode = arpg_core::ActorMode::Dead;
                 actor.action = None;
             }
+            // queue the drop for LootResolution (SPEC.md sections 71, 88):
+            // an object dropped at tick T is lootable from T+1 (section 10)
+            if let Some(m) = self.monsters.get(&id) {
+                if let Some(tc) = m.treasure_class.clone() {
+                    let drop_seed = derive_drop_seed(self.state.seed(), id, self.state.tick);
+                    self.pending_drops
+                        .push((id, m.pos, drop_seed, self.state.tick.0 as u16, tc));
+                }
+            }
+            self.monsters.remove(&id);
             let key = self.next_event_key(id);
             self.event_buffer.emit(key, GameEvent::EntityRemoved(id));
         }
     }
 
+    /// Monster damage path: same lifecycle semantics as players (SPEC.md
+    /// sections 13-14).
+    fn apply_monster_damage(&mut self, target: EntityId, source: EntityId, amount: i64) {
+        let (was_alive, now_dead) = {
+            let Some(m) = self.monsters.get_mut(&target) else {
+                return;
+            };
+            let was_alive = m.life > 0;
+            m.life = m.life.saturating_sub(amount);
+            (was_alive, m.life <= 0)
+        };
+        if let Some(actor) = self.actors.get_mut(&target) {
+            if now_dead && actor.lifecycle == arpg_core::Lifecycle::Alive {
+                actor.lifecycle = arpg_core::Lifecycle::PendingDeath;
+            }
+        }
+        let key = self.next_event_key(source);
+        self.event_buffer.emit(
+            key,
+            GameEvent::DamageApplied {
+                target,
+                source,
+                amount,
+            },
+        );
+        if was_alive && now_dead {
+            let key = self.next_event_key(source);
+            self.event_buffer.emit(
+                key,
+                GameEvent::EntityKilled {
+                    target,
+                    killer: source,
+                },
+            );
+        }
+    }
+
+    /// LootResolution phase (SPEC.md section 71): roll queued drops onto the
+    /// ground. The drop seed derives from the game seed, monster id and
+    /// death tick: fully reproducible.
+    fn resolve_loot(&mut self) {
+        let drops = std::mem::take(&mut self.pending_drops);
+        for (monster, pos, drop_seed, level, tc) in drops {
+            let item_level = 1 + level % 50;
+            if let Ok(Some(item)) = self.loot_roller.roll(&tc, drop_seed, item_level) {
+                let id = item.id;
+                let level_id = self
+                    .level
+                    .as_ref()
+                    .map(|l| l.id)
+                    .unwrap_or(arpg_core::LevelInstanceId(0));
+                let born = self.state.tick.0;
+                self.inventory.spawn_ground(item, level_id, pos);
+                self.ground_spawn_ticks.insert(id, born);
+                let key = self.next_event_key(monster);
+                self.event_buffer.emit(key, GameEvent::ItemDropped(id));
+            }
+        }
+    }
+
+    /// Expiration phase (SPEC.md section 88): ground items past their
+    /// category lifetime vanish. None means no expiry during the game.
+    pub const DEFAULT_GROUND_LIFETIME_TICKS: u64 = 5 * 25 * 60;
+
+    fn resolve_expiration(&mut self) {
+        // initial ruleset: a single ground lifetime for all categories
+        let lifetime = Self::DEFAULT_GROUND_LIFETIME_TICKS;
+        let expired: Vec<arpg_core::ItemId> = self
+            .ground_spawn_ticks
+            .iter()
+            .filter(|(id, born)| {
+                self.state.tick.0.saturating_sub(**born) > lifetime
+                    && matches!(
+                        self.inventory.location(**id),
+                        Some(crate::item::ItemLocation::Ground(..))
+                    )
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        for id in expired {
+            self.ground_spawn_ticks.remove(&id);
+            self.inventory.remove(id);
+            self.state.expired_items += 1;
+        }
+    }
+
+    /// Client pickup: validated and applied during InventoryTransactions
+    /// (SPEC.md sections 85-86). The first valid pickup wins.
+    pub fn pick_up_item(
+        &mut self,
+        player: PlayerId,
+        item: arpg_core::ItemId,
+        ground: crate::item::ItemLocation,
+        to: crate::item::ItemLocation,
+    ) -> Result<(), crate::item::ItemError> {
+        self.inventory.pick_up(player, item, ground, to)?;
+        self.ground_spawn_ticks.remove(&item);
+        let key = self.next_event_key(EntityId(player.0 as u64));
+        self.event_buffer.emit(key, GameEvent::ItemPickedUp(item));
+        Ok(())
+    }
+
     /// Mark an entity as PendingDeath (SPEC.md section 13) with kill credit.
     pub fn apply_damage(&mut self, target: EntityId, source: EntityId, amount: i64) {
+        if self.monsters.contains_key(&target) {
+            self.apply_monster_damage(target, source, amount);
+            return;
+        }
         let Some(player_id) = self
             .state
             .players
@@ -875,4 +1077,14 @@ impl GameInstance {
             let _ = self.replication.touch(player);
         }
     }
+}
+
+/// Deterministic drop seed for a monster death: BLAKE3(game seed || entity ||
+/// tick), matching the loot pipeline domain separation (SPEC.md section 71).
+fn derive_drop_seed(seed: [u8; 32], entity: EntityId, tick: Tick) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(&seed);
+    hasher.update(&entity.0.to_le_bytes());
+    hasher.update(&tick.0.to_le_bytes());
+    *hasher.finalize().as_bytes()
 }
