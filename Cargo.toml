@@ -12,6 +12,7 @@ members = [
     "crates/arpg-persistence",
     "crates/arpg-replay",
     "crates/arpg-tools",
+    "crates/arpg-fuzz",
 ]
 
 [workspace.package]
@@ -32,6 +33,7 @@ arpg-server = { path = "crates/arpg-server" }
 arpg-persistence = { path = "crates/arpg-persistence" }
 arpg-replay = { path = "crates/arpg-replay" }
 arpg-tools = { path = "crates/arpg-tools" }
+arpg-fuzz = { path = "crates/arpg-fuzz" }
 
 smallvec = "1"
 bitflags = "2"

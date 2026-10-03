@@ -50,6 +50,12 @@ impl Scheduler {
         Scheduler::default()
     }
 
+    /// Last accepted sequence for a player: the acknowledgement a client
+    /// uses to stop retransmitting (SPEC section 186 chaos harness).
+    pub fn last_accepted_sequence(&self, player: PlayerId) -> Option<u32> {
+        self.last_accepted_sequence.get(&player).copied()
+    }
+
     /// Translate a client envelope into server time and admit it.
     pub fn admit(
         &mut self,

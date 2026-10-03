@@ -59,6 +59,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "arpg-fuzz"
+version = "0.1.0"
+dependencies = [
+ "arpg-core",
+ "arpg-data",
+ "arpg-rules",
+ "arpg-sim",
+]
+
+[[package]]
 name = "arpg-persistence"
 version = "0.1.0"
 dependencies = [

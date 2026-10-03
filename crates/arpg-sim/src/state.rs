@@ -942,6 +942,12 @@ impl GameInstance {
         }
     }
 
+    /// Last accepted command sequence for a player: the ack that lets a
+    /// retransmitting client stop (SPEC section 186).
+    pub fn scheduler_last_accepted(&self, player: PlayerId) -> Option<u32> {
+        self.scheduler.last_accepted_sequence(player)
+    }
+
     /// Queue a quest event raised by gameplay; evaluated during
     /// QuestResolution (SPEC.md sections 8, 22).
     pub fn queue_quest_event(&mut self, trigger: crate::quest::QuestTrigger, source: EntityId) {
