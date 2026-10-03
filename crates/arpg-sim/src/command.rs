@@ -17,12 +17,15 @@ pub struct MoveIntent {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UseSkillIntent {
+    pub skill: SkillId,
+    pub target: Option<WorldPos>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClientCommand {
     Move(MoveIntent),
-    UseSkill {
-        skill: SkillId,
-        target: Option<WorldPos>,
-    },
+    UseSkill(UseSkillIntent),
     NoOp,
 }
 

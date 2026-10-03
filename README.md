@@ -13,8 +13,9 @@ Spécification normative : [SPEC.md](SPEC.md).
 | `arpg-rules` | `GameRules` (ruleset d'une partie) |
 | `arpg-sim` | `GameInstance`, scheduler, phases de tick, commandes |
 | `arpg-world` / `arpg-ai` | Monde, IA (M2/M5) |
-| `arpg-protocol` | DTO réseau (QUIC/prost, M1) |
-| `arpg-server` / `arpg-persistence` | Serveur, persistance (M1/M7) |
+| `arpg-protocol` | Messages Protobuf `arpg.v1`, handshake, snapshots (M1) |
+| `arpg-server` | Endpoint QUIC loopback, sessions, pont wire↔sim (M1) |
+| `arpg-persistence` | Persistance personnages (M7) |
 | `arpg-replay` / `arpg-tools` | Replays déterministes, outillage |
 
 ## Build & tests

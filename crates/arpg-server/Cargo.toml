@@ -10,4 +10,17 @@ arpg-core.workspace = true
 arpg-sim.workspace = true
 arpg-protocol.workspace = true
 arpg-persistence.workspace = true
+prost.workspace = true
+quinn.workspace = true
+rcgen = "0.13"
+rustls-pki-types = "1"
 tokio.workspace = true
+
+[dev-dependencies]
+arpg-data.workspace = true
+arpg-rules.workspace = true
+rcgen = "0.13"
+quinn.workspace = true
+rustls-pki-types = "1"
+prost.workspace = true
+arpg-sim.workspace = true
