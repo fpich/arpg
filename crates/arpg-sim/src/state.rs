@@ -30,6 +30,7 @@ pub struct GameState {
     /// Desired movement targets recorded during UpdatePlayerIntent and
     /// consumed during MovementResolution (SPEC.md section 25).
     pub movement_intents: BTreeMap<PlayerId, WorldPos>,
+    pub interact_intents: BTreeMap<PlayerId, arpg_core::ObjectId>,
     pub entities_alive: u64,
     pub attack_sequence: u64,
     pub ai_decision_sequence: u64,
@@ -160,6 +161,13 @@ impl GameInstance {
 
         let events = self.event_buffer.drain_canonical();
         let mut hash_input = self.state.canonical_hash_input();
+        if let Some(level) = &self.level {
+            for obj in &level.objects {
+                hash_input.extend_from_slice(&obj.id.0.to_le_bytes());
+                hash_input.extend_from_slice(&(obj.state as u8).to_le_bytes());
+                hash_input.extend_from_slice(&obj.cooldown_until.0.to_le_bytes());
+            }
+        }
         hash_input.extend_from_slice(&self.scheduler.canonical_hash_input());
         let state_hash = arpg_core::hash::state_hash(&hash_input);
 
@@ -179,8 +187,8 @@ impl GameInstance {
     ) {
         if let Phase::UpdatePlayerIntent = phase {
             for cmd in due {
-                if let ClientCommand::Move(intent) = &cmd.envelope.command {
-                    if self.state.players.contains_key(&cmd.player) {
+                match &cmd.envelope.command {
+                    ClientCommand::Move(intent) if self.state.players.contains_key(&cmd.player) => {
                         self.state
                             .movement_intents
                             .insert(cmd.player, intent.direction);
@@ -190,6 +198,14 @@ impl GameInstance {
                             GameEvent::EntitySpawned(arpg_core::EntityId(cmd.player.0 as u64)),
                         );
                     }
+                    ClientCommand::Interact(intent)
+                        if self.state.players.contains_key(&cmd.player) =>
+                    {
+                        self.state
+                            .interact_intents
+                            .insert(cmd.player, intent.target);
+                    }
+                    _ => {}
                 }
             }
         }
@@ -197,6 +213,74 @@ impl GameInstance {
         if let Phase::MovementResolution = phase {
             self.resolve_movement();
             self.state.movement_intents.clear();
+        }
+
+        if let Phase::InteractionResolution = phase {
+            self.resolve_interactions(_tick);
+            self.state.interact_intents.clear();
+        }
+
+        if let Phase::WorldObjectUpdate = phase {
+            if let Some(level) = self.level.as_mut() {
+                for obj in level.objects.iter_mut() {
+                    if obj.state == arpg_core::ObjectInstanceState::OnRecharge
+                        && self.state.tick >= obj.cooldown_until
+                    {
+                        obj.state = arpg_core::ObjectInstanceState::Default;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Interaction resolution (SPEC.md section 98): each intent is validated
+    /// against the target's distance, state and cooldown, then applied in
+    /// canonical player order.
+    fn resolve_interactions(&mut self, tick: arpg_core::Tick) {
+        if self.state.interact_intents.is_empty() {
+            return;
+        }
+        let intents: Vec<(PlayerId, arpg_core::ObjectId)> = self
+            .state
+            .interact_intents
+            .iter()
+            .map(|(p, o)| (*p, *o))
+            .collect();
+        for (player_id, target_id) in intents {
+            let Some(actor) = self.state.players.get(&player_id) else {
+                continue;
+            };
+            let actor_pos = actor.pos;
+            let Some(level) = self.level.as_mut() else {
+                continue;
+            };
+            let Some(obj) = level.objects.iter_mut().find(|o| o.id == target_id) else {
+                continue;
+            };
+            if !obj.can_interact(actor_pos, tick) {
+                continue;
+            }
+            use arpg_core::ObjectInstanceState as St;
+            let (new_state, cooldown_ticks) = match obj.kind {
+                arpg_core::InteractableKind::Chest
+                | arpg_core::InteractableKind::Barrel
+                | arpg_core::InteractableKind::Urn => (St::Destroyed, 0),
+                arpg_core::InteractableKind::Door => (St::OnRecharge, 10),
+                arpg_core::InteractableKind::Shrine | arpg_core::InteractableKind::Well => {
+                    (St::OnRecharge, 250)
+                }
+                _ => (St::InUse, 0),
+            };
+            obj.state = new_state;
+            if cooldown_ticks > 0 {
+                obj.cooldown_until = arpg_core::Tick(tick.0 + cooldown_ticks);
+            }
+            let _ = self.replication.touch(player_id);
+            let key = self.next_event_key(arpg_core::EntityId(player_id.0 as u64));
+            self.event_buffer.emit(
+                key,
+                GameEvent::ItemPickedUp(arpg_core::ItemId(target_id.0 as u128)),
+            );
         }
     }
 

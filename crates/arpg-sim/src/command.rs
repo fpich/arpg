@@ -1,4 +1,4 @@
-use arpg_core::{PlayerId, SkillId, Tick, WorldPos};
+use arpg_core::{ObjectId, PlayerId, SkillId, Tick, WorldPos};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MovementMode {
@@ -26,7 +26,13 @@ pub struct UseSkillIntent {
 pub enum ClientCommand {
     Move(MoveIntent),
     UseSkill(UseSkillIntent),
+    Interact(InteractIntent),
     NoOp,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InteractIntent {
+    pub target: ObjectId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

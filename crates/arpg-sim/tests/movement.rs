@@ -30,6 +30,7 @@ fn level_with_blocking_tile(blocked: (i32, i32)) -> LevelInstance {
         definition: LevelDefId(1),
         collision,
         rooms: Vec::new(),
+        objects: Vec::new(),
     }
 }
 

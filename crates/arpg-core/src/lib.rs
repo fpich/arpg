@@ -5,6 +5,7 @@ pub mod events;
 pub mod fixed;
 pub mod hash;
 pub mod id;
+pub mod object;
 pub mod rng;
 pub mod tick;
 pub mod world;
@@ -16,8 +17,9 @@ pub use events::{ActionPhase, ActorMode, EventOrderKey, GameEvent, Lifecycle, Sp
 pub use fixed::{Fixed, RoundingMode, FIXED_ONE};
 pub use id::{
     ClassId, EntityId, GameId, ItemDefId, ItemId, LevelDefId, LevelInstanceId, MonsterDefId,
-    PlayerId, QuestDefId, SkillId, StatId,
+    ObjectDefId, ObjectId, PlayerId, QuestDefId, SkillId, StatId,
 };
+pub use object::{InteractableKind, ObjectInstance, ObjectInstanceState, INTERACTION_DISTANCE};
 pub use rng::{RngDomain, RngStreams};
 pub use tick::{Tick, TICKS_PER_SECOND, TICK_DURATION_MS};
 pub use world::{FixedVec2, WorldPos, TILE_UNITS};

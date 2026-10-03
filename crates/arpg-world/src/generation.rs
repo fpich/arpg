@@ -1,4 +1,6 @@
-use arpg_core::CollisionMap;
+use arpg_core::{
+    CollisionMap, InteractableKind, ObjectDefId, ObjectId, ObjectInstance, WorldPos, TILE_UNITS,
+};
 
 pub const MAX_GENERATION_RETRIES: u32 = 8;
 
@@ -63,18 +65,56 @@ pub struct GenerationError(pub &'static str);
 pub fn generate_level(
     seed: [u8; 32],
     level_id: u32,
-) -> Result<(CollisionMap, Vec<RoomInstance>), GenerationError> {
+) -> Result<(CollisionMap, Vec<RoomInstance>, Vec<ObjectInstance>), GenerationError> {
     let graph = build_graph(&seed, level_id);
     for retry in 0..MAX_GENERATION_RETRIES {
         let sub_seed = derive_sub_seed(&seed, level_id, retry);
         if let Some(result) = materialize(&graph, &sub_seed) {
             let (map, rooms) = result;
             if validate(&map, &rooms) {
-                return Ok((map, rooms));
+                let objects = place_objects(&rooms, &sub_seed);
+                return Ok((map, rooms, objects));
             }
         }
     }
     Err(GenerationError("world generation failed after retries"))
+}
+
+/// Deterministic interactive object placement (SPEC.md section 98): one
+/// chest per mandatory room, one shrine in the quest room, one waypoint in
+/// the waypoint room, one barrel in the optional branch.
+fn place_objects(rooms: &[RoomInstance], sub_seed: &[u8; 32]) -> Vec<ObjectInstance> {
+    let mut objects = Vec::new();
+    let mut next_id = 1u64;
+    let def = |n: u32| ObjectDefId(n);
+    let mut place = |kind: InteractableKind, defn: u32, room: &Rect| {
+        let (cx, cy) = room.center();
+        let pos = WorldPos::new(
+            cx * TILE_UNITS + (sub_seed[next_id as usize % 32] as i32 - 128),
+            cy * TILE_UNITS,
+        );
+        let id = next_id;
+        next_id += 1;
+        ObjectInstance::new(ObjectId(id), def(defn), kind, pos, arpg_core::Tick(0))
+    };
+    for room in rooms {
+        match room.role {
+            RoomRole::Mandatory => {
+                objects.push(place(InteractableKind::Chest, 1, &room.rect));
+            }
+            RoomRole::Quest => {
+                objects.push(place(InteractableKind::Shrine, 2, &room.rect));
+            }
+            RoomRole::Waypoint => {
+                objects.push(place(InteractableKind::Waypoint, 3, &room.rect));
+            }
+            RoomRole::OptionalBranch => {
+                objects.push(place(InteractableKind::Barrel, 4, &room.rect));
+            }
+            _ => {}
+        }
+    }
+    objects
 }
 
 fn build_graph(seed: &[u8; 32], level_id: u32) -> LevelGraph {

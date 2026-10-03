@@ -1,7 +1,9 @@
 use arpg_core::{PlayerId, SkillId, WorldPos};
 use arpg_protocol::messages as msg;
 use arpg_sim::command::Admission;
-use arpg_sim::{ClientCommand, CommandEnvelope, MoveIntent, MovementMode, UseSkillIntent};
+use arpg_sim::{
+    ClientCommand, CommandEnvelope, InteractIntent, MoveIntent, MovementMode, UseSkillIntent,
+};
 
 /// Translation layer between wire DTOs and simulation intents.
 /// A wire command describes an intention, never a result (INV-009).
@@ -20,6 +22,11 @@ pub fn wire_to_sim(envelope: &msg::CommandEnvelope) -> Option<CommandEnvelope> {
                     (Some(x), Some(y)) => Some(WorldPos::new(x, y)),
                     _ => None,
                 },
+            })
+        }
+        Some(msg::command_envelope::Command::Interact(i)) => {
+            ClientCommand::Interact(InteractIntent {
+                target: arpg_core::ObjectId(i.object_id),
             })
         }
         Some(msg::command_envelope::Command::NoOp(_)) => ClientCommand::NoOp,

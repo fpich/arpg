@@ -43,6 +43,7 @@ message CommandEnvelope {
     MoveCommand move = 4;
     UseSkillCommand use_skill = 5;
     NoOpCommand no_op = 6;
+    InteractCommand interact = 7;
   }
 }
 
@@ -59,6 +60,10 @@ message UseSkillCommand {
 }
 
 message NoOpCommand {}
+
+message InteractCommand {
+  uint64 object_id = 1;
+}
 
 message CommandAck {
   uint32 player_id = 1;

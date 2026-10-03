@@ -25,4 +25,6 @@ newtype_id!(ItemDefId(u32));
 newtype_id!(LevelDefId(u32));
 newtype_id!(LevelInstanceId(u64));
 newtype_id!(QuestDefId(u32));
+newtype_id!(ObjectDefId(u32));
+newtype_id!(ObjectId(u64));
 newtype_id!(ClassId(u32));

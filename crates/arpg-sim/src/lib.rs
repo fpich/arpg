@@ -5,7 +5,8 @@ pub mod scheduler;
 pub mod state;
 
 pub use command::{
-    Admission, ClientCommand, CommandEnvelope, MoveIntent, MovementMode, UseSkillIntent,
+    Admission, ClientCommand, CommandEnvelope, InteractIntent, MoveIntent, MovementMode,
+    UseSkillIntent,
 };
 pub use phase::{Phase, PHASES, PHASE_ORDER};
 pub use replication::{build_client_replication, ClientReplication, ReplicationTracker};
