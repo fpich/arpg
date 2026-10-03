@@ -16,7 +16,7 @@ pub struct MoveIntent {
     pub sequence: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClientCommand {
     Move(MoveIntent),
     UseSkill {
@@ -32,4 +32,13 @@ pub struct CommandEnvelope {
     pub client_tick: Tick,
     pub player: PlayerId,
     pub command: ClientCommand,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Admission {
+    Accepted,
+    Deferred,
+    RejectedTooOld,
+    RejectedInvalid,
+    Duplicate,
 }

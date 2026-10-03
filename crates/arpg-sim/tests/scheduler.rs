@@ -1,41 +1,69 @@
 use arpg_core::{PlayerId, Tick};
-use arpg_sim::scheduler::{ScheduledCommand, Scheduler};
-use arpg_sim::{ClientCommand, CommandEnvelope};
+use arpg_sim::scheduler::Scheduler;
+use arpg_sim::{Admission, ClientCommand, CommandEnvelope};
 
-fn scheduled(seq: u32, tick: u64, player: u32) -> ScheduledCommand {
-    ScheduledCommand {
-        execute_tick: Tick(tick),
-        player: PlayerId(player),
+fn envelope(seq: u32, player: u32, client_tick: u64) -> CommandEnvelope {
+    CommandEnvelope {
         sequence: seq,
-        envelope: CommandEnvelope {
-            sequence: seq,
-            client_tick: Tick(tick),
-            player: PlayerId(player),
-            command: ClientCommand::NoOp,
-        },
+        client_tick: Tick(client_tick),
+        player: PlayerId(player),
+        command: ClientCommand::NoOp,
     }
 }
 
 #[test]
-fn scheduler_returns_due_in_tick_order() {
+fn admission_states_are_reported() {
     let mut s = Scheduler::new();
-    s.schedule(scheduled(1, 5, 1));
-    s.schedule(scheduled(2, 3, 1));
-    s.schedule(scheduled(3, 4, 1));
-
-    let due = s.take_due(Tick(4));
-    assert_eq!(due.len(), 2);
-    assert_eq!(due[0].execute_tick, Tick(3));
-    assert_eq!(due[1].execute_tick, Tick(4));
-    assert!(!s.is_empty(), "command scheduled for tick 5 must remain");
-    assert_eq!(s.take_due(Tick(5)).len(), 1);
-    assert!(s.is_empty());
+    assert_eq!(s.admit(envelope(1, 1, 1), Tick(0), 2), Admission::Accepted);
+    assert_eq!(s.admit(envelope(1, 1, 1), Tick(0), 2), Admission::Duplicate);
+    assert_eq!(s.admit(envelope(2, 1, 5), Tick(9), 2), Admission::Accepted);
+    // sequence 1 is now older than the accepted 2 for player 1
+    assert_eq!(
+        s.admit(envelope(1, 1, 5), Tick(9), 2),
+        Admission::RejectedTooOld
+    );
+    assert_eq!(
+        s.admit(envelope(0, 1, 1), Tick(0), 2),
+        Admission::RejectedInvalid
+    );
+    assert_eq!(
+        s.admit(envelope(1, 2, 1), Tick(0), 2),
+        Admission::Accepted,
+        "per-player sequences are independent"
+    );
 }
 
 #[test]
-fn scheduler_per_player_sequences_are_independent() {
+fn execute_tick_respects_input_delay_bounds() {
     let mut s = Scheduler::new();
-    assert!(s.schedule(scheduled(1, 1, 1)));
-    assert!(s.schedule(scheduled(1, 1, 2)));
-    assert!(!s.schedule(scheduled(1, 2, 1)));
+    // input delay clamped to MAX (4)
+    s.admit(envelope(1, 1, 0), Tick(10), 99);
+    // earliest = 10 + 4
+    assert_eq!(s.take_due(Tick(14)).len(), 1);
+}
+
+#[test]
+fn canonical_order_is_tick_player_sequence() {
+    let mut s = Scheduler::new();
+    // arrival order mixes players, but per-player sequences are monotonic
+    for &(player, seq) in &[(2u32, 1u32), (1, 1), (2, 2), (1, 2)] {
+        let env = CommandEnvelope {
+            sequence: seq,
+            client_tick: Tick(5),
+            player: PlayerId(player),
+            command: ClientCommand::NoOp,
+        };
+        s.admit(env, Tick(0), 1);
+    }
+    let due = s.take_due(Tick(5));
+    assert_eq!(due.len(), 4);
+    assert_eq!(due[0].player, PlayerId(1));
+    assert_eq!(due[0].sequence, 1);
+    assert_eq!(due[1].player, PlayerId(1));
+    assert_eq!(due[1].sequence, 2);
+    assert_eq!(due[2].player, PlayerId(2));
+    assert_eq!(due[2].sequence, 1);
+    assert_eq!(due[3].player, PlayerId(2));
+    assert_eq!(due[3].sequence, 2);
+    assert!(s.is_empty());
 }
