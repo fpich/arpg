@@ -6,7 +6,14 @@
 //! sim and tests. A SQL backend implements the same trait.
 
 use arpg_core::{ItemId, PlayerId};
+
+pub mod snapshot;
 use std::collections::BTreeMap;
+
+pub use snapshot::{
+    CharacterRepository, CharacterSnapshot, PersistentItem, PersistentItemLocation,
+    PersistentQuestState, PersistentWaypoints, SnapshotError, SAVE_SCHEMA_VERSION,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct CharacterRevision(pub u64);

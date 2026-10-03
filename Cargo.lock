@@ -81,7 +81,10 @@ name = "arpg-replay"
 version = "0.1.0"
 dependencies = [
  "arpg-core",
+ "arpg-data",
+ "arpg-persistence",
  "arpg-protocol",
+ "arpg-rules",
  "arpg-sim",
 ]
 
