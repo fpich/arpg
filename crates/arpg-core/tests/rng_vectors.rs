@@ -11,13 +11,11 @@ fn rng_vectors_are_stable() {
     for w in words.iter_mut() {
         *w = rng.next_u32();
     }
-    let expected = [
-        224886117u32,
-        100607545,
-        827060249,
-        1231111509,
-    ];
-    assert_eq!(words, expected, "RNG vectors changed: update SPEC.md section 15");
+    let expected = [224886117u32, 100607545, 827060249, 1231111509];
+    assert_eq!(
+        words, expected,
+        "RNG vectors changed: update SPEC.md section 15"
+    );
 }
 
 #[test]

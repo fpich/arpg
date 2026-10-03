@@ -30,18 +30,13 @@ impl Scheduler {
         if cmd.sequence <= last {
             return false;
         }
-        self.last_accepted_sequence
-            .insert(cmd.player, cmd.sequence);
+        self.last_accepted_sequence.insert(cmd.player, cmd.sequence);
         self.queue.entry(cmd.execute_tick).or_default().push(cmd);
         true
     }
 
     pub fn take_due(&mut self, tick: Tick) -> Vec<ScheduledCommand> {
-        let expired: Vec<Tick> = self
-            .queue
-            .range(..tick)
-            .map(|(&t, _)| t)
-            .collect();
+        let expired: Vec<Tick> = self.queue.range(..tick).map(|(&t, _)| t).collect();
         let mut due = Vec::new();
         for t in expired {
             if let Some(cmds) = self.queue.remove(&t) {
