@@ -161,6 +161,10 @@ pub struct GameInstance {
     /// Active damage-over-time effects (SPEC.md section 53): keyed by
     /// (target, source) with a fixed-point accumulator.
     pub dots: BTreeMap<(EntityId, u64), crate::damage::DotAccumulator>,
+    /// Two-player trades (SPEC.md sections 116-118).
+    pub trades: crate::trade::TradeSystem,
+    /// Gold and merchants (SPEC.md section 94).
+    pub economy: crate::economy::Economy,
     /// Runtime metrics (SPEC.md section 190). POLICY domain: never part of
     /// the state hash, never alters gameplay. Optional so replays and
     /// tests can run without a collector.
@@ -179,6 +183,9 @@ pub struct TickResult {
     pub tick: Tick,
     pub state_hash: [u8; 32],
     pub events: Vec<GameEvent>,
+    /// Commands executed this tick, post-scheduling (SPEC.md section
+    /// 159): exactly what a replay records.
+    pub executed_commands: Vec<ScheduledCommand>,
 }
 
 impl GameInstance {
@@ -222,6 +229,8 @@ impl GameInstance {
             sockets: crate::socket::SocketSystem::new(),
             auras: crate::aura::AuraSystem::new(),
             dots: BTreeMap::new(),
+            trades: crate::trade::TradeSystem::new(),
+            economy: crate::economy::Economy::new(),
             metrics: None,
             traces: crate::trace::TraceBuffer::new(),
             states: crate::states::StateStore::new(),
@@ -544,6 +553,7 @@ impl GameInstance {
             tick,
             state_hash,
             events,
+            executed_commands: due,
         }
     }
 
@@ -583,6 +593,11 @@ impl GameInstance {
                         if self.state.players.contains_key(&cmd.player) =>
                     {
                         self.use_potion(cmd.player, intent.item);
+                    }
+                    ClientCommand::Trade(intent)
+                        if self.state.players.contains_key(&cmd.player) =>
+                    {
+                        self.handle_trade(cmd.player, intent.clone(), tick);
                     }
                     _ => {}
                 }
@@ -843,6 +858,49 @@ impl GameInstance {
                     .apply(target, state_instance, crate::states::StackPolicy::Refresh);
             }
         }
+    }
+
+    /// Handle a trade intent (SPEC.md sections 116-118): open, set
+    /// offer, accept or cancel. The commit is persistence-driven: the
+    /// caller injects the store, and `TradeCommitted` semantics stay
+    /// owned by the TradeSystem.
+    fn handle_trade(&mut self, player: PlayerId, intent: crate::command::TradeIntent, _tick: Tick) {
+        use crate::command::TradeIntent;
+        match intent {
+            TradeIntent::Open { target } => {
+                if self.state.players.contains_key(&target) && target != player {
+                    self.trades.open(player, target);
+                }
+            }
+            TradeIntent::SetOffer { trade, items, gold } => {
+                let _ =
+                    self.trades
+                        .set_offer(arpg_persistence::TradeId(trade), player, items, gold);
+            }
+            TradeIntent::Accept { trade } => {
+                let _ = self.trades.accept(arpg_persistence::TradeId(trade), player);
+            }
+            TradeIntent::Cancel { trade } => {
+                let _ = self.trades.cancel(arpg_persistence::TradeId(trade));
+            }
+        }
+    }
+
+    /// Commit a fully accepted trade against a persistence store
+    /// (SPEC.md sections 117-118). Returns the commit outcome.
+    pub fn commit_trade<S: arpg_persistence::PersistenceStore>(
+        &mut self,
+        trade: u64,
+        revisions: &std::collections::BTreeMap<PlayerId, arpg_persistence::CharacterRevision>,
+        store: &mut S,
+    ) -> Result<Result<(), arpg_persistence::PersistenceError>, crate::trade::TradeError> {
+        self.trades.commit(
+            arpg_persistence::TradeId(trade),
+            &mut self.economy,
+            &mut self.inventory,
+            revisions,
+            store,
+        )
     }
 
     /// Position of an entity (player or monster), canonical lookup.

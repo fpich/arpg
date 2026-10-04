@@ -45,7 +45,17 @@ message CommandEnvelope {
     NoOpCommand no_op = 6;
     InteractCommand interact = 7;
     UseItemCommand use_item = 8;
+    TradeCommand trade = 9;
   }
+}
+
+message TradeCommand {
+  // 0 open, 1 set_offer, 2 accept, 3 cancel
+  uint32 op = 1;
+  uint32 target_player = 2;
+  uint64 trade_id = 3;
+  repeated uint64 item_ids = 4;
+  uint64 gold = 5;
 }
 
 message UseItemCommand {

@@ -9,6 +9,8 @@
 use arpg_core::{PlayerId, Tick};
 use arpg_sim::CommandEnvelope;
 
+pub mod trade_codec;
+
 /// Binary format versions (SPEC.md section 157).
 pub const REPLAY_VERSION: u32 = 1;
 
@@ -63,12 +65,28 @@ pub enum AdminPayload {
 }
 
 /// Wire form of a client command, independent of live intents.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CommandPayload {
-    Move { x: i32, y: i32 },
-    UseSkill { skill: u32, x: i32, y: i32 },
-    Interact { target: u64 },
-    UseItem { item: u128 },
+    Move {
+        x: i32,
+        y: i32,
+    },
+    UseSkill {
+        skill: u32,
+        x: i32,
+        y: i32,
+    },
+    Interact {
+        target: u64,
+    },
+    UseItem {
+        item: u128,
+    },
+    Trade {
+        op: u8,
+        trade: u64,
+        encoded: Vec<u8>,
+    },
     NoOp,
 }
 
@@ -101,6 +119,10 @@ impl Replay {
             },
             arpg_sim::ClientCommand::Interact(i) => CommandPayload::Interact { target: i.target.0 },
             arpg_sim::ClientCommand::UseItem(u) => CommandPayload::UseItem { item: u.item.0 },
+            arpg_sim::ClientCommand::Trade(t) => {
+                let (op, trade, encoded) = crate::trade_codec::encode(t);
+                CommandPayload::Trade { op, trade, encoded }
+            }
             arpg_sim::ClientCommand::NoOp => CommandPayload::NoOp,
         };
         self.entries.push(ReplayEntry::Command {
@@ -164,6 +186,13 @@ impl Replay {
                             out.extend_from_slice(&item.to_le_bytes());
                         }
                         CommandPayload::NoOp => out.push(3),
+                        CommandPayload::Trade { op, trade, encoded } => {
+                            out.push(5);
+                            out.push(*op);
+                            out.extend_from_slice(&trade.to_le_bytes());
+                            out.extend_from_slice(&(encoded.len() as u32).to_le_bytes());
+                            out.extend_from_slice(encoded);
+                        }
                     }
                 }
                 ReplayEntry::Transition(t) => {
@@ -259,6 +288,13 @@ impl Replay {
                         CommandPayload::UseItem {
                             item: u128::from_le_bytes(b),
                         }
+                    }
+                    5 => {
+                        let op = r.u8()?;
+                        let trade = r.u64()?;
+                        let len = r.u32()? as usize;
+                        let encoded = r.take(len)?.to_vec();
+                        CommandPayload::Trade { op, trade, encoded }
                     }
                     _ => return Err("bad payload tag"),
                 };
@@ -435,6 +471,11 @@ impl<'a> Replayer<'a> {
                             arpg_sim::ClientCommand::UseItem(arpg_sim::command::UseItemIntent {
                                 item: arpg_core::ItemId(*item),
                             })
+                        }
+                        CommandPayload::Trade { op, trade, encoded } => {
+                            let intent = crate::trade_codec::decode(*op, *trade, encoded)
+                                .map_err(|_| "corrupt trade intent in replay")?;
+                            arpg_sim::ClientCommand::Trade(intent)
                         }
                     },
                 };

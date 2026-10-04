@@ -35,6 +35,26 @@ pub fn wire_to_sim(envelope: &msg::CommandEnvelope) -> Option<CommandEnvelope> {
                 item: arpg_core::ItemId(u.item_id as u128),
             })
         }
+        Some(msg::command_envelope::Command::Trade(t)) => {
+            use arpg_sim::command::TradeIntent;
+            let intent = match t.op {
+                0 => TradeIntent::Open {
+                    target: arpg_core::PlayerId(t.target_player),
+                },
+                1 => TradeIntent::SetOffer {
+                    trade: t.trade_id,
+                    items: t
+                        .item_ids
+                        .iter()
+                        .map(|i| arpg_core::ItemId(*i as u128))
+                        .collect(),
+                    gold: t.gold,
+                },
+                2 => TradeIntent::Accept { trade: t.trade_id },
+                _ => TradeIntent::Cancel { trade: t.trade_id },
+            };
+            ClientCommand::Trade(intent)
+        }
         None => return None,
     };
     Some(CommandEnvelope {

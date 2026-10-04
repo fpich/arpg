@@ -22,14 +22,37 @@ pub struct UseSkillIntent {
     pub target: Option<WorldPos>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ClientCommand {
     Move(MoveIntent),
     UseSkill(UseSkillIntent),
     Interact(InteractIntent),
     /// Drink a potion from the belt (SPEC.md sections 82-83).
     UseItem(UseItemIntent),
+    /// Trade operations (SPEC.md sections 116-118).
+    Trade(TradeIntent),
     NoOp,
+}
+
+/// A trade operation (SPEC.md sections 116-118): open, set offer,
+/// accept or cancel. Wire-level intent; the machine enforces the
+/// Requested/Open/Locked/Persisting/Committed/Cancelled lifecycle.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TradeIntent {
+    Open {
+        target: PlayerId,
+    },
+    SetOffer {
+        trade: u64,
+        items: Vec<arpg_core::ItemId>,
+        gold: u64,
+    },
+    Accept {
+        trade: u64,
+    },
+    Cancel {
+        trade: u64,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
