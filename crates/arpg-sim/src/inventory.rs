@@ -41,6 +41,11 @@ impl InventorySystem {
         self.items.is_empty()
     }
 
+    /// Update an item's durability in place (SPEC.md section 95: repair).
+    pub fn set_durability(&mut self, id: ItemId, value: u16) -> Option<()> {
+        self.items.get_mut(&id).map(|i| i.durability = Some(value))
+    }
+
     pub fn get(&self, id: ItemId) -> Option<&ItemInstance> {
         self.items.get(&id)
     }

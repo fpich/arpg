@@ -31,7 +31,33 @@ pub enum ClientCommand {
     UseItem(UseItemIntent),
     /// Trade operations (SPEC.md sections 116-118).
     Trade(TradeIntent),
+    /// Merchant services (SPEC.md sections 95-97): buy, sell, repair,
+    /// gamble. Personal stock per player (section 95 v1 decision).
+    Merchant(MerchantIntent),
     NoOp,
+}
+
+/// A merchant operation (SPEC.md sections 95-97).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MerchantIntent {
+    Buy {
+        merchant: u64,
+        def: arpg_core::ItemDefId,
+        price: Option<u64>,
+    },
+    Sell {
+        merchant: u64,
+        item: arpg_core::ItemId,
+        base_price: u64,
+    },
+    Repair {
+        merchant: u64,
+        item: Option<arpg_core::ItemId>,
+    },
+    Gamble {
+        merchant: u64,
+        offer: u32,
+    },
 }
 
 /// A trade operation (SPEC.md sections 116-118): open, set offer,

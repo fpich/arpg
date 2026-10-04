@@ -46,7 +46,18 @@ message CommandEnvelope {
     InteractCommand interact = 7;
     UseItemCommand use_item = 8;
     TradeCommand trade = 9;
+    MerchantCommand merchant = 10;
   }
+}
+
+message MerchantCommand {
+  // 0 buy, 1 sell, 2 repair, 3 gamble
+  uint32 op = 1;
+  uint64 merchant_id = 2;
+  uint64 item_def = 3;
+  uint64 price = 4;
+  uint64 item_id = 5;
+  uint32 offer_index = 6;
 }
 
 message TradeCommand {

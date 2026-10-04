@@ -599,6 +599,11 @@ impl GameInstance {
                     {
                         self.handle_trade(cmd.player, intent.clone(), tick);
                     }
+                    ClientCommand::Merchant(intent)
+                        if self.state.players.contains_key(&cmd.player) =>
+                    {
+                        self.handle_merchant(cmd.player, intent.clone());
+                    }
                     _ => {}
                 }
             }
@@ -901,6 +906,136 @@ impl GameInstance {
             revisions,
             store,
         )
+    }
+
+    /// Handle a merchant intent (SPEC.md sections 95-97): buy, sell,
+    /// repair, gamble against the player's personal stock. Prices come
+    /// from the merchant's stock entries; failures are silently ignored
+    /// as commands describe intentions, never results (INV-009).
+    fn handle_merchant(&mut self, player: PlayerId, intent: crate::command::MerchantIntent) {
+        use crate::command::MerchantIntent;
+        match intent {
+            MerchantIntent::Buy {
+                merchant,
+                def,
+                price,
+            } => {
+                let mut gold = self.economy.gold_of(player);
+                let bought = self
+                    .economy
+                    .merchant(merchant)
+                    .buy(player, &mut gold, def, price);
+                if bought.is_ok() {
+                    self.economy.gold.insert(player, gold);
+                    self.give_item_to(player, def);
+                }
+            }
+            MerchantIntent::Sell {
+                merchant,
+                item,
+                base_price,
+            } => {
+                // ownership: the item must be in the seller's inventory
+                let owned = self
+                    .inventory
+                    .location(item)
+                    .is_some_and(|loc| matches!(loc, crate::item::ItemLocation::PlayerInventory(p, _) if p == player));
+                if !owned {
+                    return;
+                }
+                let mut gold = self.economy.gold_of(player);
+                let payout = self
+                    .economy
+                    .merchant(merchant)
+                    .sell(player, &mut gold, base_price);
+                self.economy.gold.insert(player, gold);
+                let _ = payout;
+                self.inventory.remove(item);
+            }
+            MerchantIntent::Repair { merchant, item } => {
+                let target = item.or_else(|| {
+                    self.inventory
+                        .iter_locations()
+                        .find(|(id, loc)| {
+                            matches!(loc, crate::item::ItemLocation::PlayerInventory(p, _) if p == &player)
+                                && self
+                                    .inventory
+                                    .get(*id)
+                                    .and_then(|i| i.durability)
+                                    .is_some()
+                        })
+                        .map(|(id, _)| id)
+                });
+                let Some(target) = target else { return };
+                let missing = self
+                    .inventory
+                    .get(target)
+                    .and_then(|i| i.durability)
+                    .map(|d| (100u64).saturating_sub(d as u64))
+                    .unwrap_or(0);
+                if missing == 0 {
+                    return;
+                }
+                let cost = self.economy.merchant(merchant).repair_cost(missing);
+                let mut gold = self.economy.gold_of(player);
+                if gold.carried >= cost {
+                    gold.carried -= cost;
+                    self.economy.gold.insert(player, gold);
+                    self.inventory.set_durability(target, 100);
+                }
+            }
+            MerchantIntent::Gamble { merchant, offer } => {
+                let mut gold = self.economy.gold_of(player);
+                let result =
+                    self.economy
+                        .merchant(merchant)
+                        .gamble_buy(player, &mut gold, offer as usize);
+                match result {
+                    Ok(instance) => {
+                        self.economy.gold.insert(player, gold);
+                        let def = instance.definition;
+                        let id = arpg_core::ItemId(self.inventory.highest_item_id() + 1);
+                        let instance = crate::item::ItemInstance { id, ..instance };
+                        self.inventory.spawn_ground(
+                            instance,
+                            arpg_core::LevelInstanceId(0),
+                            self.state
+                                .players
+                                .get(&player)
+                                .map(|p| p.pos)
+                                .unwrap_or(WorldPos::ZERO),
+                        );
+                        let _ = def;
+                    }
+                    Err(_) => {}
+                }
+            }
+        }
+    }
+
+    /// Give a freshly bought item to a player: spawned at their feet so
+    /// pickup rules apply (SPEC.md section 86).
+    fn give_item_to(&mut self, player: PlayerId, def: arpg_core::ItemDefId) {
+        let id = arpg_core::ItemId(self.inventory.highest_item_id() + 1);
+        let instance = crate::item::ItemInstance {
+            id,
+            definition: def,
+            quality: crate::item::ItemQuality::Normal,
+            item_level: 1,
+            generation_seed: [0; 32],
+            affixes: smallvec::SmallVec::new(),
+            sockets: smallvec::SmallVec::new(),
+            durability: None,
+            flags: 0,
+        };
+        let pos = self
+            .state
+            .players
+            .get(&player)
+            .map(|p| p.pos)
+            .unwrap_or(WorldPos::ZERO);
+        self.inventory
+            .spawn_ground(instance, arpg_core::LevelInstanceId(0), pos);
     }
 
     /// Position of an entity (player or monster), canonical lookup.

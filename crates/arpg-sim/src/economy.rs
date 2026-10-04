@@ -7,7 +7,7 @@ use arpg_core::{ItemDefId, PlayerId};
 use std::collections::BTreeMap;
 
 /// Gold is a numeric resource, not an inventory item (SPEC.md section 94).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Gold {
     pub carried: u64,
     pub stash: u64,

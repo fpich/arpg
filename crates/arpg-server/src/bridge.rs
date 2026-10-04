@@ -35,6 +35,34 @@ pub fn wire_to_sim(envelope: &msg::CommandEnvelope) -> Option<CommandEnvelope> {
                 item: arpg_core::ItemId(u.item_id as u128),
             })
         }
+        Some(msg::command_envelope::Command::Merchant(m)) => {
+            use arpg_sim::command::MerchantIntent;
+            let intent = match m.op {
+                0 => MerchantIntent::Buy {
+                    merchant: m.merchant_id,
+                    def: arpg_core::ItemDefId(m.item_def as u32),
+                    price: if m.price == 0 { None } else { Some(m.price) },
+                },
+                1 => MerchantIntent::Sell {
+                    merchant: m.merchant_id,
+                    item: arpg_core::ItemId(m.item_id as u128),
+                    base_price: m.price,
+                },
+                2 => MerchantIntent::Repair {
+                    merchant: m.merchant_id,
+                    item: if m.item_id == 0 {
+                        None
+                    } else {
+                        Some(arpg_core::ItemId(m.item_id as u128))
+                    },
+                },
+                _ => MerchantIntent::Gamble {
+                    merchant: m.merchant_id,
+                    offer: m.offer_index,
+                },
+            };
+            ClientCommand::Merchant(intent)
+        }
         Some(msg::command_envelope::Command::Trade(t)) => {
             use arpg_sim::command::TradeIntent;
             let intent = match t.op {

@@ -87,6 +87,13 @@ pub enum CommandPayload {
         trade: u64,
         encoded: Vec<u8>,
     },
+    Merchant {
+        op: u8,
+        merchant: u64,
+        a: u64,
+        b: u64,
+        c: u64,
+    },
     NoOp,
 }
 
@@ -122,6 +129,34 @@ impl Replay {
             arpg_sim::ClientCommand::Trade(t) => {
                 let (op, trade, encoded) = crate::trade_codec::encode(t);
                 CommandPayload::Trade { op, trade, encoded }
+            }
+            arpg_sim::ClientCommand::Merchant(m) => {
+                use arpg_sim::command::MerchantIntent;
+                let (op, merchant, a, b, c) = match m {
+                    MerchantIntent::Buy {
+                        merchant,
+                        def,
+                        price,
+                    } => (0u8, *merchant, def.0 as u64, price.unwrap_or(0), 0),
+                    MerchantIntent::Sell {
+                        merchant,
+                        item,
+                        base_price,
+                    } => (1u8, *merchant, item.0 as u64, *base_price, 0),
+                    MerchantIntent::Repair { merchant, item } => {
+                        (2u8, *merchant, item.map(|i| i.0 as u64).unwrap_or(0), 0, 0)
+                    }
+                    MerchantIntent::Gamble { merchant, offer } => {
+                        (3u8, *merchant, *offer as u64, 0, 0)
+                    }
+                };
+                CommandPayload::Merchant {
+                    op,
+                    merchant,
+                    a,
+                    b,
+                    c,
+                }
             }
             arpg_sim::ClientCommand::NoOp => CommandPayload::NoOp,
         };
@@ -192,6 +227,20 @@ impl Replay {
                             out.extend_from_slice(&trade.to_le_bytes());
                             out.extend_from_slice(&(encoded.len() as u32).to_le_bytes());
                             out.extend_from_slice(encoded);
+                        }
+                        CommandPayload::Merchant {
+                            op,
+                            merchant,
+                            a,
+                            b,
+                            c,
+                        } => {
+                            out.push(6);
+                            out.push(*op);
+                            out.extend_from_slice(&merchant.to_le_bytes());
+                            out.extend_from_slice(&a.to_le_bytes());
+                            out.extend_from_slice(&b.to_le_bytes());
+                            out.extend_from_slice(&c.to_le_bytes());
                         }
                     }
                 }
@@ -295,6 +344,20 @@ impl Replay {
                         let len = r.u32()? as usize;
                         let encoded = r.take(len)?.to_vec();
                         CommandPayload::Trade { op, trade, encoded }
+                    }
+                    6 => {
+                        let op = r.u8()?;
+                        let merchant = r.u64()?;
+                        let a = r.u64()?;
+                        let b = r.u64()?;
+                        let c = r.u64()?;
+                        CommandPayload::Merchant {
+                            op,
+                            merchant,
+                            a,
+                            b,
+                            c,
+                        }
                     }
                     _ => return Err("bad payload tag"),
                 };
@@ -476,6 +539,40 @@ impl<'a> Replayer<'a> {
                             let intent = crate::trade_codec::decode(*op, *trade, encoded)
                                 .map_err(|_| "corrupt trade intent in replay")?;
                             arpg_sim::ClientCommand::Trade(intent)
+                        }
+                        CommandPayload::Merchant {
+                            op,
+                            merchant,
+                            a,
+                            b,
+                            c,
+                        } => {
+                            use arpg_sim::command::MerchantIntent;
+                            let intent = match op {
+                                0 => MerchantIntent::Buy {
+                                    merchant: *merchant,
+                                    def: arpg_core::ItemDefId(*a as u32),
+                                    price: if *b == 0 { None } else { Some(*b) },
+                                },
+                                1 => MerchantIntent::Sell {
+                                    merchant: *merchant,
+                                    item: arpg_core::ItemId(*a as u128),
+                                    base_price: *b,
+                                },
+                                2 => MerchantIntent::Repair {
+                                    merchant: *merchant,
+                                    item: if *a == 0 {
+                                        None
+                                    } else {
+                                        Some(arpg_core::ItemId(*a as u128))
+                                    },
+                                },
+                                _ => MerchantIntent::Gamble {
+                                    merchant: *merchant,
+                                    offer: *a as u32,
+                                },
+                            };
+                            arpg_sim::ClientCommand::Merchant(intent)
                         }
                     },
                 };
