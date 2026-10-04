@@ -351,3 +351,49 @@ fn dot_accumulator_pays_exact_total() {
     assert_eq!(a + b + c, 1000 * 256);
     assert_eq!(dot.remaining_ticks, 0);
 }
+
+#[test]
+fn cold_monster_hit_freezes_and_slows_player() {
+    let mut inst = game();
+    let player = arpg_core::EntityId(1);
+    // find a cold-damage monster (ranged, type 3)
+    let cold_id = inst
+        .data
+        .monsters
+        .iter()
+        .find(|(_, d)| d.damage_type == 3)
+        .map(|(id, _)| *id)
+        .expect("datapack has a cold monster");
+    let monster = inst.spawn_monster_def(cold_id, WorldPos::new(0, 1));
+    // land hits until the frozen state is applied
+    let mut frozen = false;
+    for _ in 0..60 {
+        inst.monster_attack(monster, player);
+        if inst
+            .states
+            .entity_states(player)
+            .iter()
+            .any(|s| s.state == GameInstance::STATE_FROZEN)
+        {
+            frozen = true;
+            break;
+        }
+    }
+    assert!(frozen, "a cold hit must freeze the target");
+    // movement intents resolve only on even ticks while frozen
+    let start = inst.state.players.get(&PlayerId(1)).unwrap().pos;
+    inst.state
+        .movement_intents
+        .insert(PlayerId(1), arpg_core::WorldPos::new(256, 0));
+    // tick parity: push to an even tick first
+    while inst.state.tick.0 % 2 == 1 {
+        inst.tick();
+    }
+    // even tick: frozen player must not move
+    inst.state
+        .movement_intents
+        .insert(PlayerId(1), arpg_core::WorldPos::new(256, 0));
+    inst.tick();
+    let pos = inst.state.players.get(&PlayerId(1)).unwrap().pos;
+    assert_eq!(pos, start, "frozen player does not move on odd ticks");
+}

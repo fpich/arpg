@@ -1112,6 +1112,7 @@ impl GameInstance {
         let Some(m) = self.monsters.get(&monster) else {
             return;
         };
+        let damage_type = m.damage_type;
         let resists = self.effective_resists(target);
         let Some(p) = self
             .state
@@ -1138,7 +1139,7 @@ impl GameInstance {
         let tick = self.state.tick;
         let attack_index = self.traces.attack_index() + 1;
         let (final_amount, resist_percent) = if hit {
-            if m.damage_type == 5 {
+            if damage_type == 5 {
                 // Poison (section 53): a hit applies a DoT, not instant
                 // damage; the poison resistance scales the DoT total.
                 let resolved = crate::damage::apply_resist(amount, resists.poison_bp);
@@ -1174,7 +1175,7 @@ impl GameInstance {
             final_damage: final_amount,
         });
         if hit {
-            if m.damage_type == 5 {
+            if damage_type == 5 {
                 let total_fp = final_amount.max(0) * 256;
                 let key = (target, monster.0);
                 match self.dots.get_mut(&key) {
@@ -1199,6 +1200,21 @@ impl GameInstance {
                     .apply(target, instance, crate::states::StackPolicy::Refresh);
             } else if final_amount > 0 {
                 self.apply_damage(target, monster, final_amount);
+                // Cold damage chills its target (SPEC.md section 54):
+                // a frozen state halves movement until it expires.
+                if damage_type == 3 {
+                    let instance = crate::states::StateInstance {
+                        state: Self::STATE_FROZEN,
+                        source: monster,
+                        source_skill: None,
+                        applied_tick: tick,
+                        expires_tick: Some(Tick(tick.0 + 60)),
+                        stack_key: (Self::STATE_FROZEN, monster.0),
+                        magnitude_bp: 5000,
+                    };
+                    self.states
+                        .apply(target, instance, crate::states::StackPolicy::Refresh);
+                }
             }
         }
     }
@@ -2100,6 +2116,16 @@ impl GameInstance {
             let Some(p) = self.state.players.get(&player) else {
                 continue;
             };
+            // Frozen entities move at half speed (SPEC.md sections 54,
+            // 50): their movement intent resolves only every other tick.
+            let frozen = self
+                .states
+                .entity_states(EntityId(player.0 as u64))
+                .iter()
+                .any(|s| s.state == Self::STATE_FROZEN);
+            if frozen && self.state.tick.0 % 2 == 1 {
+                continue;
+            }
             let from = p.pos;
             if from == target {
                 continue;
