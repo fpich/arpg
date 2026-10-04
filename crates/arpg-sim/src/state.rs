@@ -601,7 +601,7 @@ impl GameInstance {
             self.apply_auras(tick);
         }
         if let Phase::PeriodicStates = phase {
-            self.apply_dots(tick);
+            self.apply_dots();
             self.states.expire(tick);
         }
 
@@ -979,7 +979,7 @@ impl GameInstance {
     /// Apply one tick of every active DoT (SPEC.md section 53): the
     /// accumulator guarantees the total paid is exact regardless of
     /// rounding; a finished DoT is removed.
-    fn apply_dots(&mut self, tick: Tick) {
+    fn apply_dots(&mut self) {
         if self.dots.is_empty() {
             return;
         }
