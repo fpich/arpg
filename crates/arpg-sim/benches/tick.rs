@@ -38,7 +38,7 @@ fn bench_tick(c: &mut Criterion) {
                 command: ClientCommand::Move(MoveIntent {
                     direction: WorldPos::new(seq as i32 * 512 + 256, 256),
                     movement_mode: MovementMode::Walk,
-                    sequence: seq as u32,
+                    sequence: seq,
                 }),
             });
         }
