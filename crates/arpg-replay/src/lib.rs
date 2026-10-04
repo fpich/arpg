@@ -545,7 +545,7 @@ impl<'a> Replayer<'a> {
                             merchant,
                             a,
                             b,
-                            c,
+                            c: _,
                         } => {
                             use arpg_sim::command::MerchantIntent;
                             let intent = match op {

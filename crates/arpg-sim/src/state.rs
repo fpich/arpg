@@ -990,24 +990,19 @@ impl GameInstance {
                     self.economy
                         .merchant(merchant)
                         .gamble_buy(player, &mut gold, offer as usize);
-                match result {
-                    Ok(instance) => {
-                        self.economy.gold.insert(player, gold);
-                        let def = instance.definition;
-                        let id = arpg_core::ItemId(self.inventory.highest_item_id() + 1);
-                        let instance = crate::item::ItemInstance { id, ..instance };
-                        self.inventory.spawn_ground(
-                            instance,
-                            arpg_core::LevelInstanceId(0),
-                            self.state
-                                .players
-                                .get(&player)
-                                .map(|p| p.pos)
-                                .unwrap_or(WorldPos::ZERO),
-                        );
-                        let _ = def;
-                    }
-                    Err(_) => {}
+                if let Ok(instance) = result {
+                    self.economy.gold.insert(player, gold);
+                    let id = arpg_core::ItemId(self.inventory.highest_item_id() + 1);
+                    let instance = crate::item::ItemInstance { id, ..instance };
+                    self.inventory.spawn_ground(
+                        instance,
+                        arpg_core::LevelInstanceId(0),
+                        self.state
+                            .players
+                            .get(&player)
+                            .map(|p| p.pos)
+                            .unwrap_or(WorldPos::ZERO),
+                    );
                 }
             }
         }
