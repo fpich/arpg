@@ -1,5 +1,6 @@
 use arpg_core::{ItemId, LevelDefId, MonsterDefId, SkillId};
 
+pub mod compiled;
 pub mod datapack;
 pub use datapack::{
     compile_reference_datapack, validate, ActDefinition, ClassDefinition, DataPackManifest,
