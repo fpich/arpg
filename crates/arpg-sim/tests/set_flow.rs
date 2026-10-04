@@ -105,3 +105,41 @@ fn piece_conditions_gate_tiers() {
     equip_item(&mut inst, ItemDefId(2), EquipmentSlot::Boots);
     assert_eq!(inst.sets.bonus_of(PlayerId(1), 2), 5250);
 }
+
+#[test]
+fn equipped_affixes_fold_into_player_stats() {
+    let mut inst = game();
+    let id = ItemId(inst.inventory.highest_item_id() + 1);
+    let item = ItemInstance {
+        id,
+        definition: ItemDefId(2001),
+        quality: ItemQuality::Normal,
+        item_level: 1,
+        generation_seed: [0; 32],
+        affixes: smallvec::smallvec![1, 2],
+        sockets: smallvec::SmallVec::new(),
+        durability: None,
+        flags: 0,
+    };
+    inst.inventory
+        .spawn_ground(item, arpg_core::LevelInstanceId(0), WorldPos::new(0, 0));
+    let before = inst.player_stat(PlayerId(1), arpg_sim::stat::STAT_STRENGTH);
+    inst.pick_up_item(
+        PlayerId(1),
+        id,
+        ItemLocation::Ground(arpg_core::LevelInstanceId(0), WorldPos::new(0, 0)),
+        ItemLocation::Equipment(PlayerId(1), EquipmentSlot::MainHand),
+    )
+    .expect("equip");
+    let after = inst.player_stat(PlayerId(1), arpg_sim::stat::STAT_STRENGTH);
+    // each affix contributes a flat +10; affixes 1 and 2 map to stats
+    // 2 and 3, so strength stays and dexterity gains +10
+    assert_eq!(after, before, "affix 1 and 2 do not touch strength");
+    let dex = inst.player_stat(PlayerId(1), arpg_sim::stat::STAT_DEXTERITY);
+    assert!(dex >= 10, "an affix must raise dexterity, got {}", dex);
+    // re-equipping the same item must not double the modifiers:
+    // recompute_equipment_stats clears Equipment sources first
+    inst.recompute_equipment_stats(PlayerId(1));
+    let rerun = inst.player_stat(PlayerId(1), arpg_sim::stat::STAT_DEXTERITY);
+    assert_eq!(rerun, dex, "recompute must be idempotent");
+}

@@ -2216,14 +2216,52 @@ impl GameInstance {
             return Err(e);
         }
         self.ground_spawn_ticks.remove(&item);
-        // Set bonuses are recomputed after equipment transactions
-        // (SPEC.md section 89).
-        if matches!(to, crate::item::ItemLocation::Equipment(_, _)) {
+        // Set bonuses and equipment stats are recomputed after any
+        // equipment transaction, equipping or unequipping (SPEC.md
+        // sections 39-45, 89).
+        if matches!(to, crate::item::ItemLocation::Equipment(_, _))
+            || matches!(ground, crate::item::ItemLocation::Equipment(_, _))
+        {
             self.recompute_set_bonuses(player);
+            self.recompute_equipment_stats(player);
         }
         let key = self.next_event_key(EntityId(player.0 as u64));
         self.event_buffer.emit(key, GameEvent::ItemPickedUp(item));
         Ok(())
+    }
+
+    /// Fold every equipped item's stat contributions into the actor's
+    /// stat block (SPEC.md sections 39-45): affix, rune and runeword
+    /// modifiers, all tagged Equipment so they recompute atomically.
+    pub fn recompute_equipment_stats(&mut self, player: PlayerId) {
+        let entity = EntityId(player.0 as u64);
+        let equipped: Vec<crate::item::ItemInstance> = self
+            .inventory
+            .iter_locations()
+            .filter_map(|(id, loc)| {
+                matches!(
+                    loc,
+                    crate::item::ItemLocation::Equipment(p, _) if *p == player
+                )
+                .then(|| self.inventory.get(id).cloned())
+                .flatten()
+            })
+            .collect();
+        let runewords = crate::socket::reference_runewords();
+        let Some(actor) = self.actors.get_mut(&entity) else {
+            return;
+        };
+        for item in &equipped {
+            actor
+                .stats
+                .clear_source(crate::stat::ModifierSource::Equipment(item.id.0 as u64));
+        }
+        for item in &equipped {
+            let item_block = self.sockets.compute_item_stats(item, &runewords);
+            for modifier in item_block.modifiers() {
+                actor.stats.add_modifier(*modifier);
+            }
+        }
     }
 
     /// Recompute the set bonuses of one player from their equipped

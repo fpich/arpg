@@ -74,6 +74,12 @@ impl StatBlock {
         self.modifiers.push(modifier);
     }
 
+    /// Read every modifier in the block (SPEC.md section 40): used to
+    /// fold one block's contributions into another.
+    pub fn modifiers(&self) -> &[StatModifier] {
+        &self.modifiers
+    }
+
     pub fn clear_source(&mut self, source: ModifierSource) {
         self.modifiers.retain(|m| m.source != source);
     }
