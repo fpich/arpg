@@ -66,6 +66,14 @@ pub struct GameServer {
     /// 119-121, 149): save-then-destroy. Optional so loopback tests can
     /// run without persistence.
     repository: Option<Arc<Mutex<arpg_persistence::CharacterRepository>>>,
+    /// Command rate limiter (SPEC.md section 171): admission control on
+    /// the QUIC paths. Runs on server tick time, never modifies an
+    /// already-accepted command.
+    limiter: Arc<Mutex<crate::ratelimit::RateLimiter>>,
+    /// Live snapshot subscribers (SPEC.md sections 143, 141): one
+    /// bounded channel per connected player; the host loop pushes
+    /// encoded wire snapshots each tick.
+    subscribers: Arc<Mutex<std::collections::BTreeMap<arpg_core::PlayerId, mpsc::Sender<Vec<u8>>>>>,
 }
 
 impl GameServer {
@@ -88,6 +96,10 @@ impl GameServer {
             Endpoint::server(server_config, "127.0.0.1:0".parse().unwrap()).expect("bind loopback");
         let local_addr = endpoint.local_addr().expect("local addr");
         let guard = Arc::new(Mutex::new(crate::policy::GameGuard::new(policy)));
+        let limiter = Arc::new(Mutex::new(crate::ratelimit::RateLimiter::new(
+            crate::ratelimit::RatePolicy::reference(),
+            8,
+        )));
         Ok((
             GameServer {
                 endpoint,
@@ -96,6 +108,8 @@ impl GameServer {
                 metrics: None,
                 guard,
                 repository: None,
+                limiter,
+                subscribers: Arc::new(Mutex::new(std::collections::BTreeMap::new())),
             },
             cert_der,
         ))
@@ -135,8 +149,35 @@ impl GameServer {
                 let expired = {
                     let mut game = self.game.lock().unwrap();
                     game.tick();
+                    self.limiter.lock().unwrap().tick();
                     self.guard.lock().unwrap().tick_empty()
                 };
+                {
+                    let subscribers = {
+                        let mut subs = self.subscribers.lock().unwrap();
+                        subs.retain(|_, tx| !tx.is_closed());
+                        subs.keys().copied().collect::<Vec<_>>()
+                    };
+                    for player in subscribers {
+                        let (snapshot_bytes, last_seq) = {
+                            let mut game = self.game.lock().unwrap();
+                            let repl = game.replication_for(player);
+                            let last_seq = game.scheduler_last_accepted(player).unwrap_or(0);
+                            (
+                                crate::bridge::replication_to_wire(&repl, &mut |_, _| {}),
+                                last_seq,
+                            )
+                        };
+                        let mut wire = snapshot_bytes;
+                        wire.last_processed_command_sequence = last_seq;
+                        let bytes = encode_frame(&wire);
+                        self.record_sent(bytes.len());
+                        let subs = self.subscribers.lock().unwrap();
+                        if let Some(tx) = subs.get(&player) {
+                            let _ = tx.try_send(bytes);
+                        }
+                    }
+                }
                 if expired {
                     let (players, snapshots) = {
                         let game = self.game.lock().unwrap();
@@ -312,7 +353,14 @@ impl GameServer {
         // a newer movement intent supersedes an older one. Everything else
         // (inventory, trade, skills with side effects) stays on the reliable
         // stream.
+        // rate-limit registration (section 171): capacity-bounded
+        self.limiter.lock().unwrap().register(player);
+        // snapshot subscription (sections 143, 141): the host loop pushes
+        // encoded wire snapshots on this bounded channel each tick
+        let (snap_tx, mut snap_rx) = mpsc::channel::<Vec<u8>>(64);
+        self.subscribers.lock().unwrap().insert(player, snap_tx);
         let game = Arc::clone(&self.game);
+        let limiter = Arc::clone(&self.limiter);
         let conn_for_datagrams = connection.clone();
         let datagram_task = tokio::spawn(async move {
             loop {
@@ -323,6 +371,15 @@ impl GameServer {
                 if let Ok(wire) = decode_frame::<msg::CommandEnvelope>(&buf) {
                     // only movement is allowed on the unreliable path
                     if matches!(wire.command, Some(msg::command_envelope::Command::Move(_))) {
+                        // rate-limit admission (section 171): a denied flood
+                        // never reaches the scheduler and never earns budget
+                        let decision = limiter
+                            .lock()
+                            .unwrap()
+                            .check(player, crate::ratelimit::ArrivalKind::Command);
+                        if decision == crate::ratelimit::RateDecision::Denied {
+                            continue;
+                        }
                         if let Some(sim_env) = crate::bridge::wire_to_sim(&wire) {
                             let mut g = game.lock().unwrap();
                             g.submit_command(sim_env);
@@ -332,9 +389,13 @@ impl GameServer {
             }
         });
 
-        // Reliable command loop
-        while let Ok(frame) = read_frame(&mut recv).await {
-            self.record_received(frame.len());
+        // Reliable loop: multiplexes client commands and host-loop
+        // snapshots on the same stream (sections 129, 143)
+        loop {
+            tokio::select! {
+                frame = read_frame(&mut recv) => {
+                    let Ok(frame) = frame else { break };
+                    self.record_received(frame.len());
             if !session.is_command_accepted() {
                 break;
             }
@@ -348,6 +409,24 @@ impl GameServer {
                 "command received on stream"
             );
             if let Some(sim_env) = crate::bridge::wire_to_sim(&wire) {
+                // rate-limit admission (section 171): the kind is derived
+                // from the payload, never trusted from the client
+                let kind = crate::ratelimit::ArrivalKind::of_command(&sim_env);
+                let decision = self.limiter.lock().unwrap().check(sim_env.player, kind);
+                if decision == crate::ratelimit::RateDecision::Denied {
+                    let ack = msg::CommandAck {
+                        player_id: wire.player_id,
+                        last_processed_sequence: wire.sequence,
+                        execute_tick: 0,
+                        admission: "RateLimited".into(),
+                    };
+                    let ack_bytes = encode_frame(&ack);
+                    self.record_sent(ack_bytes.len());
+                    if send.write_all(&ack_bytes).await.is_err() {
+                        break;
+                    }
+                    continue;
+                }
                 let ack = {
                     let mut game = self.game.lock().unwrap();
                     game.submit_command(sim_env);
@@ -361,12 +440,23 @@ impl GameServer {
                 };
                 let ack_bytes = encode_frame(&ack);
                 self.record_sent(ack_bytes.len());
-                if send.write_all(&ack_bytes).await.is_err() {
-                    break;
+                    if send.write_all(&ack_bytes).await.is_err() {
+                        break;
+                    }
+                }
+                }
+                Some(bytes) = snap_rx.recv() => {
+                    // forward a host-loop snapshot (section 143)
+                    self.record_sent(bytes.len());
+                    if send.write_all(&bytes).await.is_err() {
+                        break;
+                    }
                 }
             }
         }
         datagram_task.abort();
+        self.subscribers.lock().unwrap().remove(&player);
+        self.limiter.lock().unwrap().unregister(player);
         session.disconnect();
         // sections 146-149: observe the player count after the session
         // ends; the empty-grace guard starts counting down when the game

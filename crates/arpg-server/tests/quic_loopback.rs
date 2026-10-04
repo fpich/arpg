@@ -289,3 +289,127 @@ async fn empty_grace_expires_saves_and_destroys() {
     );
     shutdown_tx.send(()).await.unwrap();
 }
+
+#[tokio::test]
+async fn snapshots_stream_to_connected_clients() {
+    let data = Arc::new(arpg_data::datapack::compile_reference_datapack());
+    let rules = Arc::new(arpg_rules::GameRules::default());
+    let game = Arc::new(Mutex::new(GameInstance::new(data, rules, [7u8; 32])));
+    let (server, cert_der) = GameServer::bind_loopback(Arc::clone(&game)).unwrap();
+    let server = Arc::new(server);
+    let addr = server.local_addr;
+    let (shutdown_tx, shutdown_rx) = tokio::sync::mpsc::channel(1);
+    tokio::spawn(Arc::clone(&server).serve(shutdown_rx));
+    let client = client_endpoint(cert_der.clone());
+    let conn = client.connect(addr, "localhost").unwrap().await.unwrap();
+    let (mut send, mut recv) = conn.open_bi().await.unwrap();
+    let hello = msg::ClientHello {
+        protocol_version: arpg_server::PROTOCOL_VERSION.0,
+        client_build: 1,
+        supported_features: vec![],
+    };
+    send.write_all(&encode_frame(&hello)).await.unwrap();
+    let _ = read_frame(&mut recv).await;
+    let join = msg::JoinGameRequest {
+        game_id: vec![],
+        character_id: 1,
+    };
+    send.write_all(&encode_frame(&join)).await.unwrap();
+    let _ = read_frame(&mut recv).await;
+    // the host loop ticks at 25 tps; within a few hundred ms the client
+    // must receive a wire snapshot (section 143) on the reliable stream
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(800);
+    let mut got_snapshot = false;
+    while std::time::Instant::now() < deadline {
+        let frame =
+            tokio::time::timeout(std::time::Duration::from_millis(100), read_frame(&mut recv))
+                .await;
+        match frame {
+            Ok(bytes) => {
+                if let Ok(snap) = msg::Snapshot::decode(bytes.as_slice()) {
+                    assert!(snap.tick > 0, "snapshot carries a live tick");
+                    assert!(snap.snapshot_id > 0);
+                    got_snapshot = true;
+                    break;
+                }
+            }
+            _ => continue,
+        }
+    }
+    assert!(got_snapshot, "client must receive wire snapshots each tick");
+    shutdown_tx.send(()).await.unwrap();
+}
+
+#[tokio::test]
+async fn command_flood_is_rate_limited() {
+    let data = Arc::new(arpg_data::datapack::compile_reference_datapack());
+    let rules = Arc::new(arpg_rules::GameRules::default());
+    let game = Arc::new(Mutex::new(GameInstance::new(data, rules, [7u8; 32])));
+    let (server, cert_der) = GameServer::bind_loopback(Arc::clone(&game)).unwrap();
+    let server = Arc::new(server);
+    let addr = server.local_addr;
+    let (shutdown_tx, shutdown_rx) = tokio::sync::mpsc::channel(1);
+    tokio::spawn(Arc::clone(&server).serve(shutdown_rx));
+    let client = client_endpoint(cert_der.clone());
+    let conn = client.connect(addr, "localhost").unwrap().await.unwrap();
+    let (mut send, mut recv) = conn.open_bi().await.unwrap();
+    let hello = msg::ClientHello {
+        protocol_version: arpg_server::PROTOCOL_VERSION.0,
+        client_build: 1,
+        supported_features: vec![],
+    };
+    send.write_all(&encode_frame(&hello)).await.unwrap();
+    let _ = read_frame(&mut recv).await;
+    let join = msg::JoinGameRequest {
+        game_id: vec![],
+        character_id: 1,
+    };
+    send.write_all(&encode_frame(&join)).await.unwrap();
+    let _ = read_frame(&mut recv).await;
+    // flood far beyond the reference burst budget (60 commands)
+    let mut accepted = 0;
+    let mut rate_limited = 0;
+    for seq in 1..=200u32 {
+        let env = msg::CommandEnvelope {
+            sequence: seq,
+            client_tick: 1,
+            player_id: 1,
+            command: Some(msg::command_envelope::Command::Move(msg::MoveCommand {
+                x: 0,
+                y: 0,
+                movement_mode: 0,
+            })),
+        };
+        send.write_all(&encode_frame(&env)).await.unwrap();
+        // drain acks and snapshots until we find the ack for this sequence
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
+        loop {
+            let frame =
+                tokio::time::timeout(std::time::Duration::from_millis(200), read_frame(&mut recv));
+            match frame.await {
+                Ok(bytes) => {
+                    if let Ok(ack) = msg::CommandAck::decode(bytes.as_slice()) {
+                        if ack.last_processed_sequence == seq {
+                            if ack.admission == "Accepted" {
+                                accepted += 1;
+                            } else if ack.admission == "RateLimited" {
+                                rate_limited += 1;
+                            }
+                            break;
+                        }
+                    }
+                }
+                _ => break,
+            }
+            if std::time::Instant::now() > deadline {
+                break;
+            }
+        }
+    }
+    assert!(
+        rate_limited > 0,
+        "a 200-command flood must hit the rate limiter (accepted {accepted}, limited {rate_limited})"
+    );
+    assert!(accepted > 0, "the first commands within burst must pass");
+    shutdown_tx.send(()).await.unwrap();
+}
