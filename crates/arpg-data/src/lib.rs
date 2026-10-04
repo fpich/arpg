@@ -66,6 +66,9 @@ pub struct MonsterDefinition {
     /// 5 poison (SPEC.md section 51). Ranged attackers deal elemental
     /// damage so resistances matter in play.
     pub damage_type: u8,
+    /// Whether the monster leaves a corpse on death (SPEC.md section
+    /// 100): enables revive, corpse explosion and corpse consumption.
+    pub leaves_corpse: bool,
 }
 
 #[derive(Debug, Clone)]

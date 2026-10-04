@@ -230,3 +230,32 @@ fn champion_scaling_changes_monster_stats() {
         "Resistant lands a resist state"
     );
 }
+
+#[test]
+fn dead_monsters_leave_corpses_that_expire() {
+    let mut inst = arpg_sim::GameInstance::new(
+        std::sync::Arc::new(arpg_data::datapack::compile_reference_datapack()),
+        std::sync::Arc::new(arpg_rules::GameRules::default()),
+        [42u8; 32],
+    );
+    let monster = inst.spawn_monster_def(arpg_core::MonsterDefId(1), WorldPos::new(0, 0));
+    inst.apply_damage(monster, arpg_core::EntityId(999), 1_000_000);
+    inst.tick();
+    assert_eq!(inst.corpses.len(), 1, "a slain monster leaves a corpse");
+    let corpse = inst.corpses.iter().next().unwrap();
+    assert_eq!(corpse.monster_def, arpg_core::MonsterDefId(1));
+    assert_eq!(corpse.pos, WorldPos::new(0, 0));
+    assert!(!corpse.consumed);
+    // consuming marks it and it stops serving skills
+    let id = corpse.id;
+    assert!(inst.corpses.consume(id).is_some());
+    assert!(inst.corpses.consume(id).is_none());
+    // a second kill spawns another corpse; expiry reaps old ones
+    let monster2 = inst.spawn_monster_def(arpg_core::MonsterDefId(2), WorldPos::new(512, 0));
+    inst.apply_damage(monster2, arpg_core::EntityId(999), 1_000_000);
+    inst.tick();
+    for _ in 0..(arpg_sim::GameInstance::DEFAULT_CORPSE_LIFETIME_TICKS + 2) {
+        inst.tick();
+    }
+    assert!(inst.corpses.is_empty(), "corpses expire after the lifetime");
+}

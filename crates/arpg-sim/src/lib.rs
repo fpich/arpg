@@ -3,6 +3,7 @@ pub mod admin;
 pub mod ai;
 pub mod aura;
 pub mod command;
+pub mod corpse;
 pub mod damage;
 pub mod economy;
 pub mod inventory;

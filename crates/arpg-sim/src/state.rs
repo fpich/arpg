@@ -50,6 +50,9 @@ pub struct MonsterState {
     /// Damage type index (0 physical, 1 magic, 2 fire, 3 cold, 4
     /// lightning, 5 poison) used to resolve resistance (SPEC.md section 51).
     pub damage_type: u8,
+    /// Datapack definition this monster spawned from (SPEC.md section
+    /// 100): needed for corpse creation.
+    pub definition: Option<arpg_core::MonsterDefId>,
 }
 
 #[derive(Debug, Default)]
@@ -186,6 +189,9 @@ pub struct GameInstance {
     /// Monster packs (SPEC.md section 64): engine-side registry with
     /// aggro linkage consumed by the damage path.
     pub packs: crate::pack::PackSystem,
+    /// Monster corpses (SPEC.md section 100): spawned on death when the
+    /// definition allows, consumed by corpse-targeted skills.
+    pub corpses: crate::corpse::CorpseSystem,
     /// Derived-stat graph (SPEC.md section 42): strength and dexterity
     /// feed physical damage, attack rating and defense. Read-only at
     /// runtime; validated at load.
@@ -263,6 +269,7 @@ impl GameInstance {
             defense_profiles: BTreeMap::new(),
             stat_graph: crate::stat::default_stat_graph(),
             packs: crate::pack::PackSystem::new(),
+            corpses: crate::corpse::CorpseSystem::new(),
             metrics: None,
             traces: crate::trace::TraceBuffer::new(),
             states: crate::states::StateStore::new(),
@@ -387,6 +394,7 @@ impl GameInstance {
             experience: 20,
             ranged: false,
             damage_type: 0,
+            definition: None,
         })
     }
 
@@ -421,6 +429,7 @@ impl GameInstance {
             experience,
             ranged,
             damage_type,
+            definition: Some(def_id),
         })
     }
 
@@ -613,6 +622,7 @@ impl GameInstance {
         self.sockets.hash_bytes(&mut hash_input);
         self.auras.hash_bytes(&mut hash_input);
         self.packs.hash_bytes(&mut hash_input);
+        self.corpses.hash_bytes(&mut hash_input);
         for (player, bonus) in &self.cast_speed_bonus_bp {
             hash_input.extend_from_slice(&player.0.to_le_bytes());
             hash_input.extend_from_slice(&bonus.to_le_bytes());
@@ -2071,6 +2081,28 @@ impl GameInstance {
                 crate::quest::QuestTrigger::MonsterKilled(arpg_core::MonsterDefId(0)),
                 source,
             );
+            // Corpse creation (SPEC.md section 100): when the monster's
+            // definition allows it, a corpse records the original type,
+            // position and killer metadata for later consumption.
+            if let Some(m) = self.monsters.get(&target) {
+                if let Some(def_id) = m.definition {
+                    let leaves_corpse = self
+                        .data
+                        .monsters
+                        .get(&def_id)
+                        .map(|d| d.leaves_corpse)
+                        .unwrap_or(false);
+                    if leaves_corpse {
+                        let killer = self
+                            .state
+                            .players
+                            .keys()
+                            .find(|p| EntityId(p.0 as u64) == source)
+                            .copied();
+                        self.corpses.spawn(def_id, m.pos, killer, self.state.tick.0);
+                    }
+                }
+            }
             if was_alive && now_dead {
                 self.award_monster_xp(target);
             }
@@ -2165,6 +2197,9 @@ impl GameInstance {
     /// category lifetime vanish. None means no expiry during the game.
     pub const DEFAULT_GROUND_LIFETIME_TICKS: u64 = 5 * 25 * 60;
 
+    /// Corpse lifetime before expiration cleanup (SPEC.md section 100).
+    pub const DEFAULT_CORPSE_LIFETIME_TICKS: u64 = 600;
+
     fn resolve_expiration(&mut self) {
         // initial ruleset: a single ground lifetime for all categories
         let lifetime = Self::DEFAULT_GROUND_LIFETIME_TICKS;
@@ -2185,6 +2220,10 @@ impl GameInstance {
             self.inventory.remove(id);
             self.state.expired_items += 1;
         }
+        // Corpse cleanup (SPEC.md section 100): old corpses are reaped
+        // on the same expiration policy.
+        self.corpses
+            .expire(self.state.tick.0, Self::DEFAULT_CORPSE_LIFETIME_TICKS);
     }
 
     /// Last accepted command sequence for a player: the ack that lets a

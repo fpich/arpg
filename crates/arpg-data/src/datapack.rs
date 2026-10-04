@@ -774,6 +774,7 @@ pub fn compile_reference_datapack() -> GameData {
                 ranged,
                 act,
                 damage_type,
+                leaves_corpse: true,
             },
         );
     }
@@ -793,6 +794,7 @@ pub fn compile_reference_datapack() -> GameData {
                 ranged: i % 2 == 1,
                 act: i as u8,
                 damage_type: i as u8 % 6,
+                leaves_corpse: true,
             },
         );
     }
