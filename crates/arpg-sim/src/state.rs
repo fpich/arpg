@@ -1612,7 +1612,8 @@ impl GameInstance {
             self.spawn_missile(def_id, caster, caster_pos, target_pos);
         }
         if outcome.damage != 0 || outcome.heal != 0 || outcome.mana_restored != 0 {
-            self.apply_skill_outcome(caster, target_pos, &outcome);
+            let melee = matches!(def.timing, crate::skill::TimingFormula::AttackTicks(_));
+            self.apply_skill_outcome(caster, target_pos, &outcome, melee);
         }
     }
 
@@ -1621,6 +1622,7 @@ impl GameInstance {
         caster: EntityId,
         target_pos: Option<WorldPos>,
         outcome: &crate::skill::SkillOutcome,
+        melee: bool,
     ) {
         let target = target_pos.and_then(|pos| {
             self.state
@@ -1669,7 +1671,49 @@ impl GameInstance {
                 .unwrap_or((0, 0));
             let secondary =
                 crate::secondary::resolve(&profile, roll, outcome.damage, life, max_life);
-            if outcome.damage != 0 {
+            // Melee swings roll to hit (SPEC.md sections 46-47): the
+            // dexterity-derived attack rating faces the monster's
+            // defense proxy; spells always land like D2 elemental hits.
+            let mut landed = true;
+            if melee && self.monsters.contains_key(&target) {
+                let caster_level = self
+                    .state
+                    .players
+                    .get(&caster_player)
+                    .map(|p| p.level)
+                    .unwrap_or(1);
+                let ar = self
+                    .player_stat(caster_player, crate::stat::STAT_ATTACK_RATING)
+                    .max(caster_level * 50);
+                let defender_level = self
+                    .monsters
+                    .get(&target)
+                    .map(|m| (m.damage / 10).max(1))
+                    .unwrap_or(1);
+                let chance_bp = arpg_rules::chance_to_hit(
+                    ar,
+                    defender_level * 25,
+                    caster_level,
+                    defender_level,
+                ) * 100;
+                let draw = roll(8) % 10_000;
+                landed = draw < chance_bp as u64;
+                self.traces.record_attack(crate::trace::AttackTrace {
+                    tick: self.state.tick,
+                    attack_index: self.traces.attack_index() + 1,
+                    source: caster,
+                    target,
+                    attack_rating: ar,
+                    defense: defender_level * 25,
+                    chance_bp: chance_bp as i64,
+                    roll_bp: draw as i64,
+                    hit: landed,
+                    physical_raw: outcome.damage,
+                    resistance_percent: 0,
+                    final_damage: if landed { outcome.damage } else { 0 },
+                });
+            }
+            if outcome.damage != 0 && landed {
                 let amplified = crate::secondary::amplify(outcome.damage, &secondary);
                 // Strength feeds physical damage through the stat graph
                 // (SPEC.md sections 42, 50).

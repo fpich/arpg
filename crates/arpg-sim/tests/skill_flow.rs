@@ -376,6 +376,12 @@ fn attack_speed_bonus_shrinks_swing_time() {
     })
     .unwrap();
     inst.add_player(PlayerId(1), WorldPos::new(0, 0));
+    // high dexterity so the to-hit roll lands
+    inst.actors
+        .get_mut(&arpg_core::EntityId(1))
+        .unwrap()
+        .stats
+        .set_base(arpg_sim::stat::STAT_DEXTERITY, 1000);
     inst.attack_speed_bonus_bp.insert(PlayerId(1), 10_000);
     let monster = inst.spawn_monster_with_tc(WorldPos::new(256, 0), None);
     if let Some(m) = inst.monsters.get_mut(&monster) {
@@ -442,4 +448,58 @@ fn strength_feeds_physical_damage_through_stat_graph() {
         low
     );
     assert!(low > 0, "the base hit must still land");
+}
+
+#[test]
+fn melee_swings_roll_to_hit_and_dexterity_helps() {
+    // identical melee scenarios except dexterity: the high-dexterity
+    // attacker lands measurably more damage over repeated swings
+    let run = |dex: i64| -> i64 {
+        let mut inst = setup();
+        inst.register_skill(arpg_sim::skill::SkillDefinition {
+            id: SkillId(8),
+            targeting: TargetingSpec::Entity,
+            cost: Default::default(),
+            timing: arpg_sim::skill::TimingFormula::AttackTicks(1),
+            program: SkillProgram {
+                ops: vec![SkillOp::DealDamage(DamagePacket {
+                    physical: DamageRange::new(5, 5),
+                    ..DamagePacket::default()
+                })],
+            },
+        })
+        .unwrap();
+        inst.add_player(PlayerId(1), WorldPos::new(0, 0));
+        inst.actors
+            .get_mut(&arpg_core::EntityId(1))
+            .unwrap()
+            .stats
+            .set_base(arpg_sim::stat::STAT_DEXTERITY, dex);
+        let monster = inst.spawn_monster_with_tc(WorldPos::new(256, 0), None);
+        if let Some(m) = inst.monsters.get_mut(&monster) {
+            m.life = 5000;
+        }
+        let before = inst.monsters.get(&monster).unwrap().life;
+        for seq in 1..=20 {
+            inst.submit_command(skill_cmd(
+                PlayerId(1),
+                seq,
+                SkillId(8),
+                Some(WorldPos::new(256, 0)),
+            ));
+            for _ in 0..(arpg_sim::DEFAULT_INPUT_DELAY_TICKS + 3) {
+                inst.tick();
+            }
+        }
+        before - inst.monsters.get(&monster).unwrap().life
+    };
+    let low = run(0);
+    let high = run(1000);
+    assert!(
+        high > low,
+        "dexterity must improve hit rate ({} vs {})",
+        high,
+        low
+    );
+    assert!(high > 0, "the high-dex attacker must land hits");
 }
