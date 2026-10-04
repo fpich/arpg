@@ -153,6 +153,9 @@ pub struct GameInstance {
     /// the state hash, never alters gameplay. Optional so replays and
     /// tests can run without a collector.
     pub metrics: Option<std::sync::Arc<std::sync::Mutex<arpg_metrics::Metrics>>>,
+    /// Combat and loot audit traces (SPEC.md sections 167-168). POLICY
+    /// domain: never part of the state hash.
+    pub traces: crate::trace::TraceBuffer,
     /// XP pipeline configuration (SPEC.md section 110).
     pub xp_pipeline: crate::social::XpPipeline,
 }
@@ -203,6 +206,7 @@ impl GameInstance {
             summons: crate::summon::SummonSystem::new(),
             sockets: crate::socket::SocketSystem::new(),
             metrics: None,
+            traces: crate::trace::TraceBuffer::new(),
             xp_pipeline: crate::social::XpPipeline::D2_LIKE,
         }
     }
@@ -654,8 +658,49 @@ impl GameInstance {
         if !within_range {
             return;
         }
+        // Hit resolution (SPEC.md sections 46-47): ruleset CTH, roll drawn
+        // from a dedicated BLAKE3 combat domain, trace recorded (167).
+        let attack_rating = m.damage * 100;
+        let defense = p.level * 25;
+        let attacker_level = (m.damage / 10).max(1);
+        let chance_bp =
+            arpg_rules::chance_to_hit(attack_rating, defense, attacker_level, p.level) * 100;
+        let roll_bp = (self.combat_draw(monster, target) % 9500) as i64;
+        let hit = roll_bp < chance_bp;
         let amount = m.damage;
-        self.apply_damage(target, monster, amount);
+        let tick = self.state.tick;
+        let attack_index = self.traces.attack_index() + 1;
+        self.traces.record_attack(crate::trace::AttackTrace {
+            tick,
+            attack_index,
+            source: monster,
+            target,
+            attack_rating,
+            defense,
+            chance_bp,
+            roll_bp,
+            hit,
+            physical_raw: amount,
+            resistance_percent: 0,
+            final_damage: if hit { amount } else { 0 },
+        });
+        if hit {
+            self.apply_damage(target, monster, amount);
+        }
+    }
+
+    /// Deterministic combat roll (SPEC.md section 47): BLAKE3(game seed ||
+    /// attacker || defender || tick || attack counter), a dedicated domain
+    /// like the loot drop seed (section 71).
+    fn combat_draw(&self, attacker: EntityId, defender: EntityId) -> u64 {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(&self.state.seed());
+        hasher.update(&attacker.0.to_le_bytes());
+        hasher.update(&defender.0.to_le_bytes());
+        hasher.update(&self.state.tick.0.to_le_bytes());
+        hasher.update(&self.traces.attack_index().to_le_bytes());
+        let out = *hasher.finalize().as_bytes();
+        u64::from_le_bytes(out[..8].try_into().unwrap())
     }
 
     /// Apply AI movement intents recorded during AiDecision, in canonical
@@ -1082,18 +1127,54 @@ impl GameInstance {
         let drops = std::mem::take(&mut self.pending_drops);
         for (monster, pos, drop_seed, level, tc) in drops {
             let item_level = 1 + level % 50;
-            if let Ok(Some(item)) = self.loot_roller.roll(&tc, drop_seed, item_level) {
-                let id = item.id;
-                let level_id = self
-                    .level
-                    .as_ref()
-                    .map(|l| l.id)
-                    .unwrap_or(arpg_core::LevelInstanceId(0));
-                let born = self.state.tick.0;
-                self.inventory.spawn_ground(item, level_id, pos);
-                self.ground_spawn_ticks.insert(id, born);
-                let key = self.next_event_key(monster);
-                self.event_buffer.emit(key, GameEvent::ItemDropped(id));
+            let rolled = self.loot_roller.roll(&tc, drop_seed, item_level);
+            let tick = self.state.tick;
+            let death_index = self.traces.death_index() + 1;
+            let (tc_name, entry_name) =
+                (format!("{tc:?}"), format!("{} entries", tc.entries.len()));
+            match rolled {
+                Ok(Some(item)) => {
+                    let id = item.id;
+                    let quality = format!("{:?}", item.quality);
+                    let affix_count = item.affixes.len();
+                    let level_id = self
+                        .level
+                        .as_ref()
+                        .map(|l| l.id)
+                        .unwrap_or(arpg_core::LevelInstanceId(0));
+                    let born = self.state.tick.0;
+                    self.inventory.spawn_ground(item, level_id, pos);
+                    self.ground_spawn_ticks.insert(id, born);
+                    let key = self.next_event_key(monster);
+                    self.event_buffer.emit(key, GameEvent::ItemDropped(id));
+                    self.traces.record_loot(crate::trace::LootTrace {
+                        tick,
+                        death_index,
+                        monster,
+                        drop_seed,
+                        treasure_class: tc_name,
+                        entry: entry_name,
+                        base: format!("def {}", id.0),
+                        quality,
+                        affix_count,
+                        item: Some(id),
+                    });
+                }
+                Ok(None) => {
+                    self.traces.record_loot(crate::trace::LootTrace {
+                        tick,
+                        death_index,
+                        monster,
+                        drop_seed,
+                        treasure_class: tc_name,
+                        entry: entry_name,
+                        base: "none".into(),
+                        quality: "none".into(),
+                        affix_count: 0,
+                        item: None,
+                    });
+                }
+                Err(_) => {}
             }
         }
     }

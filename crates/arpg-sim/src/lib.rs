@@ -19,6 +19,7 @@ pub mod stat;
 pub mod state;
 pub mod states;
 pub mod summon;
+pub mod trace;
 pub mod trade;
 
 pub use actor::{ActionTiming, ActiveAction, Actor, InterruptPriority, Target};

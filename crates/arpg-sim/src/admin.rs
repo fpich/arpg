@@ -160,10 +160,13 @@ impl GameInstance {
                 Ok(AdminOutcome::StatSet)
             }
             AdminCommand::Kill { entity } => {
-                let Some(m) = self.monsters.get_mut(entity) else {
+                let Some(m) = self.monsters.get(entity) else {
                     return Err(AdminError::UnknownEntity);
                 };
-                m.life = 0;
+                let life = m.life.max(1);
+                // route through the standard damage path so PendingDeath,
+                // kill credit and loot all resolve normally (section 13)
+                self.apply_damage(*entity, *entity, life);
                 Ok(AdminOutcome::Killed)
             }
             AdminCommand::CompleteQuest { quest } => {
