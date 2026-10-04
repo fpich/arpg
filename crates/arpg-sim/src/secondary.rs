@@ -179,3 +179,15 @@ mod tests {
         assert_eq!(out.crushing_amount, 0);
     }
 }
+
+/// Defensive profile of a player (SPEC.md sections 47, 56): block and
+/// hit-recovery tunables consumed when a monster hit lands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct DefenseProfile {
+    /// Base block chance in basis points before the curve.
+    pub block_base_bp: i32,
+    /// Raw block-chance bonus curved through the block system.
+    pub block_bonus_bp: i64,
+    /// Raw hit-recovery bonus curved through the hit-recovery system.
+    pub hit_recovery_bonus_bp: i64,
+}

@@ -14,7 +14,7 @@ pub mod quest;
 pub mod replication;
 pub mod scheduler;
 pub mod secondary;
-pub use secondary::{SecondaryOutcome, SecondaryProfile};
+pub use secondary::{DefenseProfile, SecondaryOutcome, SecondaryProfile};
 pub mod set;
 pub mod skill;
 pub mod social;

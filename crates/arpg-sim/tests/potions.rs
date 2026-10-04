@@ -438,3 +438,66 @@ fn prevent_healing_blocks_potion_life_gain() {
     let restored = inst.state.players.get(&PlayerId(1)).unwrap().life;
     assert!(restored > after, "healing resumes after the state expires");
 }
+
+#[test]
+fn block_profile_reduces_incoming_damage() {
+    use arpg_sim::DefenseProfile;
+    // identical scenarios except the defense profile; the block cap of
+    // 7500bp means most but not all hits are cancelled
+    let run = |with_block: bool| -> i64 {
+        let mut inst = game();
+        let player = arpg_core::EntityId(1);
+        if with_block {
+            inst.defense_profiles.insert(
+                PlayerId(1),
+                DefenseProfile {
+                    block_base_bp: 10_000,
+                    ..Default::default()
+                },
+            );
+        }
+        let monster = inst.spawn_monster(WorldPos::new(0, 1));
+        for _ in 0..20 {
+            inst.monster_attack(monster, player);
+        }
+        inst.state.players.get(&PlayerId(1)).unwrap().life
+    };
+    let blocked = run(true);
+    let unblocked = run(false);
+    assert!(
+        blocked > unblocked,
+        "blocking must reduce damage taken ({} vs {})",
+        blocked,
+        unblocked
+    );
+    assert!(blocked < 100, "unblocked hits must still connect sometimes");
+}
+
+#[test]
+fn heavy_hit_staggers_target_with_hit_recovery() {
+    let mut inst = game();
+    let player = arpg_core::EntityId(1);
+    let monster = inst.spawn_monster(WorldPos::new(0, 1));
+    if let Some(m) = inst.monsters.get_mut(&monster) {
+        m.damage = 40;
+    }
+    let before = inst.state.players.get(&PlayerId(1)).unwrap().life;
+    let mut staggered = false;
+    for _ in 0..20 {
+        inst.monster_attack(monster, player);
+        if inst
+            .states
+            .entity_states(player)
+            .iter()
+            .any(|s| s.state == GameInstance::STATE_SLOWED)
+        {
+            staggered = true;
+            break;
+        }
+    }
+    assert!(
+        before < 100 || staggered,
+        "heavy hits must connect or stagger"
+    );
+    assert!(staggered, "a heavy hit must apply hit recovery");
+}

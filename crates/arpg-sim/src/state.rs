@@ -180,6 +180,9 @@ pub struct GameInstance {
     /// Attack-speed bonuses per player in basis points (SPEC.md
     /// section 56).
     pub attack_speed_bonus_bp: BTreeMap<PlayerId, i64>,
+    /// Defense profiles per player (SPEC.md sections 47, 56): block
+    /// chance and hit-recovery bonuses consumed by the defense rolls.
+    pub defense_profiles: BTreeMap<PlayerId, crate::secondary::DefenseProfile>,
     /// Runtime metrics (SPEC.md section 190). POLICY domain: never part of
     /// the state hash, never alters gameplay. Optional so replays and
     /// tests can run without a collector.
@@ -250,6 +253,7 @@ impl GameInstance {
             secondary_profiles: BTreeMap::new(),
             cast_speed_bonus_bp: BTreeMap::new(),
             attack_speed_bonus_bp: BTreeMap::new(),
+            defense_profiles: BTreeMap::new(),
             metrics: None,
             traces: crate::trace::TraceBuffer::new(),
             states: crate::states::StateStore::new(),
@@ -551,6 +555,12 @@ impl GameInstance {
         for (player, bonus) in &self.attack_speed_bonus_bp {
             hash_input.extend_from_slice(&player.0.to_le_bytes());
             hash_input.extend_from_slice(&bonus.to_le_bytes());
+        }
+        for (player, prof) in &self.defense_profiles {
+            hash_input.extend_from_slice(&player.0.to_le_bytes());
+            hash_input.extend_from_slice(&prof.block_base_bp.to_le_bytes());
+            hash_input.extend_from_slice(&prof.block_bonus_bp.to_le_bytes());
+            hash_input.extend_from_slice(&prof.hit_recovery_bonus_bp.to_le_bytes());
         }
         for (player, prof) in &self.secondary_profiles {
             hash_input.extend_from_slice(&player.0.to_le_bytes());
@@ -1187,7 +1197,40 @@ impl GameInstance {
             resistance_percent: resist_percent,
             final_damage: final_amount,
         });
+        // Block (SPEC.md sections 47, 56): a dedicated defense roll
+        // against the curved block chance cancels the whole packet.
         if hit {
+            let defense_profile = self
+                .defense_profiles
+                .get(&PlayerId(target.0 as u32))
+                .copied()
+                .unwrap_or_default();
+            let systems = crate::speeds::SpeedSystems::default();
+            let block_bp = crate::speeds::block_chance_bp(
+                defense_profile.block_base_bp,
+                defense_profile.block_bonus_bp,
+                &systems,
+            );
+            let blocked =
+                block_bp > 0 && (self.defense_draw(monster, target) % 10_000) < block_bp as u64;
+            if blocked {
+                let key = self.next_event_key(monster);
+                self.event_buffer
+                    .emit(key, GameEvent::ActionStarted(target));
+                if let Some(actor) = self.actors.get_mut(&target) {
+                    actor.start_action(
+                        arpg_core::ActorMode::Block,
+                        tick,
+                        crate::actor::Target::None,
+                        crate::actor::ActionTiming {
+                            windup_ticks: 0,
+                            impact_tick: 1,
+                            recovery_ticks: 0,
+                        },
+                    );
+                }
+                return;
+            }
             if damage_type == 5 {
                 let total_fp = final_amount.max(0) * 256;
                 let key = (target, monster.0);
@@ -1213,6 +1256,41 @@ impl GameInstance {
                     .apply(target, instance, crate::states::StackPolicy::Refresh);
             } else if final_amount > 0 {
                 self.apply_damage(target, monster, final_amount);
+                // Hit recovery (SPEC.md sections 47, 56): a heavy hit
+                // (a quarter of max life or more) staggers the target;
+                // the hit-recovery curve shrinks the stagger duration.
+                if final_amount >= 25 {
+                    let systems = crate::speeds::SpeedSystems::default();
+                    let bonus = self
+                        .defense_profiles
+                        .get(&PlayerId(target.0 as u32))
+                        .map(|d| d.hit_recovery_bonus_bp)
+                        .unwrap_or(0);
+                    let duration = crate::speeds::hit_recovery_ticks(4, bonus, &systems);
+                    let instance = crate::states::StateInstance {
+                        state: Self::STATE_SLOWED,
+                        source: monster,
+                        source_skill: None,
+                        applied_tick: tick,
+                        expires_tick: Some(Tick(tick.0 + duration as u64)),
+                        stack_key: (Self::STATE_SLOWED, monster.0),
+                        magnitude_bp: 5000,
+                    };
+                    self.states
+                        .apply(target, instance, crate::states::StackPolicy::Refresh);
+                    if let Some(actor) = self.actors.get_mut(&target) {
+                        actor.start_action(
+                            arpg_core::ActorMode::HitRecovery,
+                            tick,
+                            crate::actor::Target::None,
+                            crate::actor::ActionTiming {
+                                windup_ticks: 0,
+                                impact_tick: 1,
+                                recovery_ticks: duration.saturating_sub(1),
+                            },
+                        );
+                    }
+                }
                 // Cold damage chills its target (SPEC.md section 54):
                 // a frozen state halves movement until it expires.
                 if damage_type == 3 {
@@ -1309,6 +1387,18 @@ impl GameInstance {
     /// Deterministic combat roll (SPEC.md section 47): BLAKE3(game seed ||
     /// attacker || defender || tick || attack counter), a dedicated domain
     /// like the loot drop seed (section 71).
+    fn defense_draw(&self, attacker: EntityId, defender: EntityId) -> u64 {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(&self.state.seed());
+        hasher.update(&attacker.0.to_le_bytes());
+        hasher.update(&defender.0.to_le_bytes());
+        hasher.update(&self.state.tick.0.to_le_bytes());
+        hasher.update(&self.traces.attack_index().to_le_bytes());
+        hasher.update(&[7u8]);
+        let out = *hasher.finalize().as_bytes();
+        u64::from_le_bytes(out[..8].try_into().unwrap())
+    }
+
     fn combat_draw(&self, attacker: EntityId, defender: EntityId) -> u64 {
         let mut hasher = blake3::Hasher::new();
         hasher.update(&self.state.seed());
