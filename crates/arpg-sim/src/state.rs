@@ -375,6 +375,122 @@ impl GameInstance {
         Ok(())
     }
 
+    /// Persistent fraction of a character (SPEC.md sections 119-121):
+    /// items, gold, quest progress, waypoints and the hireling. Built
+    /// for the save-then-destroy pipeline at empty-grace expiry
+    /// (section 149).
+    pub fn character_snapshot(&self, player: PlayerId) -> arpg_persistence::CharacterSnapshot {
+        let p = self.state.players.get(&player);
+        let items: Vec<arpg_persistence::PersistentItem> = self
+            .inventory
+            .iter_locations()
+            .filter_map(|(id, loc)| {
+                let item = self.inventory.get(id)?;
+                let location = match loc {
+                    crate::item::ItemLocation::PlayerInventory(_, g) => {
+                        arpg_persistence::PersistentItemLocation::Inventory { x: g.x, y: g.y }
+                    }
+                    crate::item::ItemLocation::Equipment(_, s) => {
+                        arpg_persistence::PersistentItemLocation::Equipment { slot: *s as u8 }
+                    }
+                    crate::item::ItemLocation::Belt(_, s) => {
+                        arpg_persistence::PersistentItemLocation::Belt { slot: *s }
+                    }
+                    crate::item::ItemLocation::Stash(_, s) => {
+                        arpg_persistence::PersistentItemLocation::Stash {
+                            page: s.page,
+                            x: s.x,
+                            y: s.y,
+                        }
+                    }
+                    crate::item::ItemLocation::Cube(_, g) => {
+                        arpg_persistence::PersistentItemLocation::Cube { x: g.x, y: g.y }
+                    }
+                    crate::item::ItemLocation::Ground(_, _) => return None,
+                };
+                Some(arpg_persistence::PersistentItem {
+                    id,
+                    definition: item.definition.0,
+                    location,
+                })
+            })
+            .collect();
+        let gold = self.economy.gold.get(&player).copied().unwrap_or_default();
+        let quests = self
+            .quests
+            .character_states
+            .get(&player)
+            .map(|cs| {
+                cs.quests
+                    .iter()
+                    .map(|(def, status)| {
+                        let status = match status {
+                            crate::quest::QuestStatus::NotStarted => 0u8,
+                            crate::quest::QuestStatus::Active => 1,
+                            crate::quest::QuestStatus::Completed => 2,
+                            crate::quest::QuestStatus::Rewarded => 3,
+                            crate::quest::QuestStatus::Failed => 4,
+                        };
+                        (def.0, status)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let unlocked = self
+            .waypoints
+            .unlocked_by_difficulty(player)
+            .into_iter()
+            .map(|(difficulty, wps)| (difficulty.0, wps.into_iter().map(|w| w.0).collect()))
+            .collect();
+        let hireling = self.summons.hireling_of(player).map(|h| {
+            arpg_persistence::snapshot::HirelingSnapshot {
+                experience: h.experience,
+                dead: h.dead,
+                revive_cost: h.revive_cost,
+                equipment: Vec::new(),
+            }
+        });
+        arpg_persistence::CharacterSnapshot {
+            schema_version: arpg_persistence::SAVE_SCHEMA_VERSION,
+            revision: 0,
+            class: arpg_core::ClassId(0),
+            level: p.map(|p| p.level.max(0) as u16).unwrap_or(1),
+            experience: p.map(|p| p.experience).unwrap_or(0),
+            items,
+            carried_gold: gold.carried,
+            stash_gold: gold.stash,
+            quests: arpg_persistence::PersistentQuestState { quests },
+            waypoints: arpg_persistence::PersistentWaypoints { unlocked },
+            hireling,
+        }
+    }
+
+    /// Destroy the GameState at empty-grace expiry (SPEC.md section
+    /// 149): transient world state is cleared; monsters never persist
+    /// (spawn-time state). The tick counter is preserved so late
+    /// references stay coherent.
+    pub fn destroy_state(&mut self) {
+        self.state.players.clear();
+        self.state.movement_intents.clear();
+        self.state.interact_intents.clear();
+        self.actors.clear();
+        self.monsters.clear();
+        self.missiles.clear();
+        self.dots.clear();
+        self.pending_drops.clear();
+        self.ground_spawn_ticks.clear();
+        self.monster_move_intents.clear();
+        self.scheduler = crate::scheduler::Scheduler::new();
+        self.command_queue = crate::scheduler::CommandQueue::new();
+        self.event_buffer = arpg_core::EventBuffer::new();
+        self.parties = crate::social::PartySystem::new();
+        self.hostility = crate::social::HostilityMatrix::default();
+        self.summons = crate::summon::SummonSystem::new();
+        self.auras = crate::aura::AuraSystem::new();
+        self.trades = crate::trade::TradeSystem::new();
+        self.interest = crate::interest::InterestSet::new();
+    }
+
     /// Plug an AI brain; it is consulted during Perception/AiDecision.
     pub fn set_ai_brain(&mut self, brain: Box<dyn crate::ai::AiBrain>) {
         self.ai_brain = Some(brain);

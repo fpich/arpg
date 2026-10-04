@@ -104,3 +104,24 @@ fn datapack_skills_are_deterministic() {
     };
     assert_eq!(run(), run());
 }
+#[test]
+fn native_effect_budget_respected() {
+    let inst = instance();
+    let total = inst.skills.len();
+    assert!(total > 0, "the datapack must register skills");
+    let native = inst
+        .skills
+        .values()
+        .filter(|def| {
+            def.program
+                .ops
+                .iter()
+                .any(|op| matches!(op, arpg_sim::SkillOp::Native(_)))
+        })
+        .count();
+    let without = total - native;
+    assert!(
+        without * 10 >= total * 9,
+        "SPEC.md section 38: at least 90% of skills must avoid native effects, got {native}/{total} natives"
+    );
+}

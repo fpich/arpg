@@ -62,6 +62,10 @@ pub struct GameServer {
     /// Empty-grace lifecycle guard (SPEC.md section 149): observes the
     /// player count and counts the grace down when the game is empty.
     guard: Arc<Mutex<crate::policy::GameGuard>>,
+    /// Character snapshots produced at empty-grace expiry (sections
+    /// 119-121, 149): save-then-destroy. Optional so loopback tests can
+    /// run without persistence.
+    repository: Option<Arc<Mutex<arpg_persistence::CharacterRepository>>>,
 }
 
 impl GameServer {
@@ -71,13 +75,19 @@ impl GameServer {
     pub fn bind_loopback(
         game: Arc<Mutex<GameInstance>>,
     ) -> Result<(GameServer, Vec<u8>), quinn::ConnectionError> {
+        Self::bind_loopback_with_policy(game, crate::policy::ServerPolicy::default())
+    }
+
+    /// Bind strictly to loopback with an explicit lifecycle policy.
+    pub fn bind_loopback_with_policy(
+        game: Arc<Mutex<GameInstance>>,
+        policy: crate::policy::ServerPolicy,
+    ) -> Result<(GameServer, Vec<u8>), quinn::ConnectionError> {
         let (server_config, cert_der) = Self::self_signed_config().expect("server config");
         let endpoint =
             Endpoint::server(server_config, "127.0.0.1:0".parse().unwrap()).expect("bind loopback");
         let local_addr = endpoint.local_addr().expect("local addr");
-        let guard = Arc::new(Mutex::new(crate::policy::GameGuard::new(
-            crate::policy::ServerPolicy::default(),
-        )));
+        let guard = Arc::new(Mutex::new(crate::policy::GameGuard::new(policy)));
         Ok((
             GameServer {
                 endpoint,
@@ -85,6 +95,7 @@ impl GameServer {
                 game,
                 metrics: None,
                 guard,
+                repository: None,
             },
             cert_der,
         ))
@@ -99,6 +110,61 @@ impl GameServer {
     /// Attach a metrics collector for network byte counters (section 190).
     pub fn set_metrics(&mut self, metrics: Arc<Mutex<arpg_metrics::Metrics>>) {
         self.metrics = Some(metrics);
+    }
+
+    /// Attach the character repository used at empty-grace expiry
+    /// (sections 119-121, 149).
+    pub fn set_repository(
+        &mut self,
+        repository: Arc<Mutex<arpg_persistence::CharacterRepository>>,
+    ) {
+        self.repository = Some(repository);
+    }
+
+    /// Background host loop (sections 148-149): ticks the game at the
+    /// canonical tick rate, then the empty-grace guard; when the guard
+    /// reports expiry the remaining characters are snapshotted and saved
+    /// and the GameState is destroyed. Grace ticks only advance when the
+    /// game is empty, so an active game ticks forever.
+    fn host_loop(self: Arc<Self>) -> tokio::task::JoinHandle<()> {
+        tokio::spawn(async move {
+            let tick_dur = std::time::Duration::from_millis(arpg_core::TICK_DURATION_MS.into());
+            let mut interval = tokio::time::interval(tick_dur);
+            loop {
+                interval.tick().await;
+                let expired = {
+                    let mut game = self.game.lock().unwrap();
+                    game.tick();
+                    self.guard.lock().unwrap().tick_empty()
+                };
+                if expired {
+                    let (players, snapshots) = {
+                        let game = self.game.lock().unwrap();
+                        let players: Vec<arpg_core::PlayerId> =
+                            game.state.players.keys().copied().collect();
+                        let snapshots = players
+                            .iter()
+                            .map(|p| (*p, game.character_snapshot(*p)))
+                            .collect::<Vec<_>>();
+                        (players, snapshots)
+                    };
+                    if let Some(repo) = &self.repository {
+                        let mut repo = repo.lock().unwrap();
+                        for (player, snapshot) in snapshots {
+                            repo.save(player, snapshot);
+                        }
+                    }
+                    tracing::info!(
+                        players = players.len(),
+                        "empty grace expired: characters saved, game destroyed"
+                    );
+                    {
+                        let mut game = self.game.lock().unwrap();
+                        game.destroy_state();
+                    }
+                }
+            }
+        })
     }
 
     fn record_sent(&self, len: usize) {
@@ -125,8 +191,10 @@ impl GameServer {
         Ok((ServerConfig::with_single_cert(vec![cert_der], key)?, der))
     }
 
-    /// Serve connections until the endpoint is closed.
+    /// Serve connections until the endpoint is closed. The host loop
+    /// starts with it and is aborted on shutdown.
     pub async fn serve(self: Arc<Self>, mut shutdown: mpsc::Receiver<()>) {
+        let host_loop = Arc::clone(&self).host_loop();
         loop {
             tokio::select! {
                 incoming = self.endpoint.accept() => {
@@ -145,6 +213,7 @@ impl GameServer {
                 _ = shutdown.recv() => break,
             }
         }
+        host_loop.abort();
     }
 
     async fn handle_connection(self: Arc<Self>, connection: quinn::Connection) {

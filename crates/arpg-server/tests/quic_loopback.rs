@@ -237,3 +237,55 @@ async fn quic_loopback_use_item_command() {
     assert_eq!(ack.last_processed_sequence, 1);
     shutdown_tx.send(()).await.unwrap();
 }
+#[tokio::test]
+async fn empty_grace_expires_saves_and_destroys() {
+    let data = Arc::new(arpg_data::GameData::default());
+    let rules = Arc::new(arpg_rules::GameRules::default());
+    let game = Arc::new(Mutex::new(GameInstance::new(data, rules, [7u8; 32])));
+    let policy = arpg_server::policy::ServerPolicy {
+        empty_grace_ticks: 3,
+    };
+    let (mut server, cert_der) =
+        GameServer::bind_loopback_with_policy(Arc::clone(&game), policy).unwrap();
+    let repository = Arc::new(std::sync::Mutex::new(
+        arpg_persistence::CharacterRepository::new(),
+    ));
+    server.set_repository(Arc::clone(&repository));
+    let server = Arc::new(server);
+    let addr = server.local_addr;
+    let (shutdown_tx, shutdown_rx) = tokio::sync::mpsc::channel(1);
+    tokio::spawn(Arc::clone(&server).serve(shutdown_rx));
+    // client joins then drops the connection
+    let client = client_endpoint(cert_der.clone());
+    let conn = client.connect(addr, "localhost").unwrap().await.unwrap();
+    let (mut send, mut recv) = conn.open_bi().await.unwrap();
+    let hello = msg::ClientHello {
+        protocol_version: arpg_server::PROTOCOL_VERSION.0,
+        client_build: 1,
+        supported_features: vec![],
+    };
+    send.write_all(&encode_frame(&hello)).await.unwrap();
+    let _ = read_frame(&mut recv).await;
+    let join = msg::JoinGameRequest {
+        game_id: vec![],
+        character_id: 1,
+    };
+    send.write_all(&encode_frame(&join)).await.unwrap();
+    let _ = read_frame(&mut recv).await;
+    conn.close(quinn::VarInt::from(0u32), b"done");
+    // host loop ticks the short grace down (3 ticks = 120ms), saves the
+    // character and destroys the GameState (sections 148-149)
+    tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+    let snapshot = repository
+        .lock()
+        .unwrap()
+        .load(PlayerId(1))
+        .unwrap()
+        .cloned();
+    assert!(snapshot.is_some(), "character must be saved at expiry");
+    assert!(
+        game.lock().unwrap().state.players.is_empty(),
+        "GameState must be destroyed at expiry"
+    );
+    shutdown_tx.send(()).await.unwrap();
+}

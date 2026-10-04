@@ -505,6 +505,24 @@ impl WaypointState {
             .unwrap_or(false)
     }
 
+    /// All unlocked waypoints of one character across difficulties
+    /// (SPEC.md section 120): the persistent view used by snapshots.
+    pub fn unlocked_by_difficulty(
+        &self,
+        player: PlayerId,
+    ) -> std::collections::BTreeMap<DifficultyId, Vec<WaypointId>> {
+        let mut out: std::collections::BTreeMap<DifficultyId, Vec<WaypointId>> =
+            std::collections::BTreeMap::new();
+        for ((p, difficulty), set) in &self.unlocked {
+            if *p == player {
+                out.entry(*difficulty)
+                    .or_default()
+                    .extend(set.iter().copied());
+            }
+        }
+        out
+    }
+
     pub fn unlocked_of(&self, player: PlayerId, difficulty: DifficultyId) -> Vec<WaypointId> {
         self.unlocked
             .get(&(player, difficulty))
