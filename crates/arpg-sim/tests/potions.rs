@@ -299,3 +299,55 @@ fn monster_fire_damage_reduced_by_resist_state() {
         assert_eq!(trace.physical_raw, raw);
     }
 }
+
+#[test]
+fn poison_monster_applies_dot_over_ticks() {
+    let mut inst = game();
+    let player = arpg_core::EntityId(1);
+    // find a poison-damage monster in the datapack (ranged, type 5)
+    let poison_id = inst
+        .data
+        .monsters
+        .iter()
+        .find(|(_, d)| d.damage_type == 5)
+        .map(|(id, _)| *id)
+        .expect("datapack has a poison monster");
+    let monster = inst.spawn_monster_def(poison_id, WorldPos::new(0, 1));
+    let raw = inst.monsters.get(&monster).unwrap().damage;
+    let life_before = inst.state.players.get(&PlayerId(1)).unwrap().life;
+    // land hits until the poison DoT is applied
+    let mut poisoned = false;
+    for _ in 0..40 {
+        inst.monster_attack(monster, player);
+        if inst.dots.contains_key(&(player, monster.0)) {
+            poisoned = true;
+            break;
+        }
+    }
+    assert!(poisoned, "a poison hit must register a DoT");
+    // tick the DoT out; total damage paid must equal the raw hit
+    let life_after_hit = inst.state.players.get(&PlayerId(1)).unwrap().life;
+    for _ in 0..12 {
+        inst.tick();
+    }
+    let life_end = inst.state.players.get(&PlayerId(1)).unwrap().life;
+    let lost = life_before - life_end;
+    // at least one full poison hit was absorbed over time
+    assert!(lost >= raw.min(life_before - life_after_hit + raw));
+    assert!(!inst.dots.contains_key(&(player, monster.0)));
+    // the poisoned state must have expired
+    assert!(inst
+        .states
+        .get(player, GameInstance::STATE_POISONED, monster)
+        .is_none());
+}
+
+#[test]
+fn dot_accumulator_pays_exact_total() {
+    let mut dot = arpg_sim::DotAccumulator::new(1000 * 256, 3);
+    let a = dot.tick_amount();
+    let b = dot.tick_amount();
+    let c = dot.tick_amount();
+    assert_eq!(a + b + c, 1000 * 256);
+    assert_eq!(dot.remaining_ticks, 0);
+}

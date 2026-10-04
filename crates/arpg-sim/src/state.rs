@@ -158,6 +158,9 @@ pub struct GameInstance {
     /// Auras (SPEC.md section 55): state producers refreshed on a
     /// data-owned interval.
     pub auras: crate::aura::AuraSystem,
+    /// Active damage-over-time effects (SPEC.md section 53): keyed by
+    /// (target, source) with a fixed-point accumulator.
+    pub dots: BTreeMap<(EntityId, u64), crate::damage::DotAccumulator>,
     /// Runtime metrics (SPEC.md section 190). POLICY domain: never part of
     /// the state hash, never alters gameplay. Optional so replays and
     /// tests can run without a collector.
@@ -218,6 +221,7 @@ impl GameInstance {
             summons: crate::summon::SummonSystem::new(),
             sockets: crate::socket::SocketSystem::new(),
             auras: crate::aura::AuraSystem::new(),
+            dots: BTreeMap::new(),
             metrics: None,
             traces: crate::trace::TraceBuffer::new(),
             states: crate::states::StateStore::new(),
@@ -510,6 +514,13 @@ impl GameInstance {
         self.summons.hash_bytes(&mut hash_input);
         self.sockets.hash_bytes(&mut hash_input);
         self.auras.hash_bytes(&mut hash_input);
+        for (key, dot) in &self.dots {
+            hash_input.extend_from_slice(&key.0 .0.to_le_bytes());
+            hash_input.extend_from_slice(&key.1.to_le_bytes());
+            hash_input.extend_from_slice(&dot.total_damage_fp.to_le_bytes());
+            hash_input.extend_from_slice(&(dot.remaining_ticks as i64).to_le_bytes());
+            hash_input.extend_from_slice(&dot.accumulator.to_le_bytes());
+        }
         hash_input.extend_from_slice(&self.states.canonical_hash_input());
         let state_hash = arpg_core::hash::state_hash(&hash_input);
         if let Some(metrics) = &self.metrics {
@@ -590,6 +601,7 @@ impl GameInstance {
             self.apply_auras(tick);
         }
         if let Phase::PeriodicStates = phase {
+            self.apply_dots(tick);
             self.states.expire(tick);
         }
 
@@ -899,17 +911,24 @@ impl GameInstance {
         let tick = self.state.tick;
         let attack_index = self.traces.attack_index() + 1;
         let (final_amount, resist_percent) = if hit {
-            let resolved = crate::damage::resolve_damage(
-                crate::damage::RollAmounts {
-                    physical: if m.damage_type == 0 { amount } else { 0 },
-                    magic: if m.damage_type == 1 { amount } else { 0 },
-                    fire: if m.damage_type == 2 { amount } else { 0 },
-                    cold: if m.damage_type == 3 { amount } else { 0 },
-                    lightning: if m.damage_type == 4 { amount } else { 0 },
-                },
-                &resists,
-            );
-            (resolved, self.resist_percent(&resists, m.damage_type))
+            if m.damage_type == 5 {
+                // Poison (section 53): a hit applies a DoT, not instant
+                // damage; the poison resistance scales the DoT total.
+                let resolved = crate::damage::apply_resist(amount, resists.poison_bp);
+                (resolved, self.resist_percent(&resists, m.damage_type))
+            } else {
+                let resolved = crate::damage::resolve_damage(
+                    crate::damage::RollAmounts {
+                        physical: if m.damage_type == 0 { amount } else { 0 },
+                        magic: if m.damage_type == 1 { amount } else { 0 },
+                        fire: if m.damage_type == 2 { amount } else { 0 },
+                        cold: if m.damage_type == 3 { amount } else { 0 },
+                        lightning: if m.damage_type == 4 { amount } else { 0 },
+                    },
+                    &resists,
+                );
+                (resolved, self.resist_percent(&resists, m.damage_type))
+            }
         } else {
             (0, 0)
         };
@@ -927,8 +946,58 @@ impl GameInstance {
             resistance_percent: resist_percent,
             final_damage: final_amount,
         });
-        if hit && final_amount > 0 {
-            self.apply_damage(target, monster, final_amount);
+        if hit {
+            if m.damage_type == 5 {
+                let total_fp = final_amount.max(0) * 256;
+                let key = (target, monster.0);
+                match self.dots.get_mut(&key) {
+                    Some(dot) if dot.remaining_ticks > 0 => {
+                        dot.total_damage_fp = dot.total_damage_fp.saturating_add(total_fp);
+                    }
+                    _ => {
+                        self.dots
+                            .insert(key, crate::damage::DotAccumulator::new(total_fp, 10));
+                    }
+                }
+                let instance = crate::states::StateInstance {
+                    state: Self::STATE_POISONED,
+                    source: monster,
+                    source_skill: None,
+                    applied_tick: tick,
+                    expires_tick: Some(Tick(tick.0 + 10)),
+                    stack_key: (Self::STATE_POISONED, monster.0),
+                    magnitude_bp: 0,
+                };
+                self.states
+                    .apply(target, instance, crate::states::StackPolicy::Refresh);
+            } else if final_amount > 0 {
+                self.apply_damage(target, monster, final_amount);
+            }
+        }
+    }
+
+    /// Apply one tick of every active DoT (SPEC.md section 53): the
+    /// accumulator guarantees the total paid is exact regardless of
+    /// rounding; a finished DoT is removed.
+    fn apply_dots(&mut self, tick: Tick) {
+        if self.dots.is_empty() {
+            return;
+        }
+        let keys: Vec<(EntityId, u64)> = self.dots.keys().copied().collect();
+        for key in keys {
+            let Some(dot) = self.dots.get_mut(&key) else {
+                continue;
+            };
+            let amount_fp = dot.tick_amount();
+            let amount = crate::damage::fixed_to_units(amount_fp);
+            let remaining = dot.remaining_ticks;
+            let source = EntityId(key.1);
+            if amount > 0 {
+                self.apply_damage(key.0, source, amount);
+            }
+            if remaining == 0 {
+                self.dots.remove(&key);
+            }
         }
     }
 
