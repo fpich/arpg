@@ -10,6 +10,7 @@ arpg-world.workspace = true
 blake3.workspace = true
 arpg-core.workspace = true
 arpg-data.workspace = true
+arpg-metrics.workspace = true
 arpg-rules.workspace = true
 serde.workspace = true
 smallvec.workspace = true

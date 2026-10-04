@@ -35,6 +35,7 @@ arpg-persistence = { path = "crates/arpg-persistence" }
 arpg-replay = { path = "crates/arpg-replay" }
 arpg-tools = { path = "crates/arpg-tools" }
 arpg-fuzz = { path = "crates/arpg-fuzz" }
+arpg-metrics = { path = "crates/arpg-metrics" }
 
 smallvec = "1"
 bitflags = "2"
