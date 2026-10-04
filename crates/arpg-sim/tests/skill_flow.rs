@@ -403,3 +403,43 @@ fn attack_speed_bonus_shrinks_swing_time() {
     );
     let _ = life_before;
 }
+
+#[test]
+fn strength_feeds_physical_damage_through_stat_graph() {
+    let run = |strength: i64| -> i64 {
+        let mut inst = setup();
+        inst.register_skill(fireball()).unwrap();
+        inst.add_player(PlayerId(1), WorldPos::new(0, 0));
+        let entity = arpg_core::EntityId(1);
+        inst.actors
+            .get_mut(&entity)
+            .unwrap()
+            .stats
+            .set_base(arpg_sim::stat::STAT_STRENGTH, strength);
+        let monster = inst.spawn_monster_with_tc(WorldPos::new(256, 0), None);
+        if let Some(m) = inst.monsters.get_mut(&monster) {
+            m.life = 5000;
+        }
+        let before = inst.monsters.get(&monster).unwrap().life;
+        inst.submit_command(skill_cmd(
+            PlayerId(1),
+            1,
+            SkillId(1),
+            Some(WorldPos::new(256, 0)),
+        ));
+        for _ in 0..12 {
+            inst.tick();
+        }
+        let _ = before;
+        before - inst.monsters.get(&monster).unwrap().life
+    };
+    let low = run(0);
+    let high = run(50);
+    assert!(
+        high > low,
+        "strength must add physical damage ({} vs {})",
+        high,
+        low
+    );
+    assert!(low > 0, "the base hit must still land");
+}

@@ -183,6 +183,10 @@ pub struct GameInstance {
     /// Defense profiles per player (SPEC.md sections 47, 56): block
     /// chance and hit-recovery bonuses consumed by the defense rolls.
     pub defense_profiles: BTreeMap<PlayerId, crate::secondary::DefenseProfile>,
+    /// Derived-stat graph (SPEC.md section 42): strength and dexterity
+    /// feed physical damage, attack rating and defense. Read-only at
+    /// runtime; validated at load.
+    pub stat_graph: crate::stat::StatGraph,
     /// Runtime metrics (SPEC.md section 190). POLICY domain: never part of
     /// the state hash, never alters gameplay. Optional so replays and
     /// tests can run without a collector.
@@ -254,6 +258,7 @@ impl GameInstance {
             cast_speed_bonus_bp: BTreeMap::new(),
             attack_speed_bonus_bp: BTreeMap::new(),
             defense_profiles: BTreeMap::new(),
+            stat_graph: crate::stat::default_stat_graph(),
             metrics: None,
             traces: crate::trace::TraceBuffer::new(),
             states: crate::states::StateStore::new(),
@@ -1152,7 +1157,11 @@ impl GameInstance {
         // Hit resolution (SPEC.md sections 46-47): ruleset CTH, roll drawn
         // from a dedicated BLAKE3 combat domain, trace recorded (167).
         let attack_rating = m.damage * 100;
-        let defense = p.level * 25;
+        // Defense resolves through the stat graph (SPEC.md sections
+        // 42-43); the level fallback keeps unstat'd players playable.
+        let defense = self
+            .player_stat(PlayerId(target.0 as u32), crate::stat::STAT_DEFENSE)
+            .max(p.level * 25);
         let attacker_level = (m.damage / 10).max(1);
         let chance_bp =
             arpg_rules::chance_to_hit(attack_rating, defense, attacker_level, p.level) * 100;
@@ -1333,6 +1342,19 @@ impl GameInstance {
                 self.dots.remove(&key);
             }
         }
+    }
+
+    /// Resolve a player stat through the derived-stat graph (SPEC.md
+    /// sections 42-43): base and modified values live on the actor's
+    /// stat block; derived stats evaluate in dependency order.
+    pub fn player_stat(&self, player: PlayerId, stat: arpg_core::StatId) -> i64 {
+        let entity = EntityId(player.0 as u64);
+        let Some(actor) = self.actors.get(&entity) else {
+            return 0;
+        };
+        self.stat_graph
+            .evaluate(stat, &actor.stats)
+            .unwrap_or_else(|| actor.stats.compute(stat))
     }
 
     /// Whether healing is currently blocked on the entity (SPEC.md
@@ -1649,7 +1671,13 @@ impl GameInstance {
                 crate::secondary::resolve(&profile, roll, outcome.damage, life, max_life);
             if outcome.damage != 0 {
                 let amplified = crate::secondary::amplify(outcome.damage, &secondary);
-                let total = amplified.saturating_add(secondary.crushing_amount);
+                // Strength feeds physical damage through the stat graph
+                // (SPEC.md sections 42, 50).
+                let strength_bonus =
+                    self.player_stat(caster_player, crate::stat::STAT_PHYSICAL_DAMAGE_BONUS);
+                let total = amplified
+                    .saturating_add(strength_bonus.max(0))
+                    .saturating_add(secondary.crushing_amount);
                 if total > 0 {
                     self.apply_damage(target, caster, total);
                 }

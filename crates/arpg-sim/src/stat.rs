@@ -198,6 +198,51 @@ impl StatGraph {
     }
 }
 
+/// Canonical stat ids (SPEC.md sections 39-42): shared by equipment,
+/// states and the derived-stat graph so modifiers compose in one block.
+pub const STAT_STRENGTH: StatId = StatId(1);
+pub const STAT_DEXTERITY: StatId = StatId(2);
+pub const STAT_VITALITY: StatId = StatId(3);
+pub const STAT_ENERGY: StatId = StatId(4);
+pub const STAT_PHYSICAL_DAMAGE_BONUS: StatId = StatId(10);
+pub const STAT_ATTACK_RATING: StatId = StatId(11);
+pub const STAT_DEFENSE: StatId = StatId(12);
+
+/// The reference derived-stat graph (SPEC.md section 42): strength
+/// feeds physical damage, dexterity feeds attack rating and defense.
+/// Acyclic by construction; validated at load time.
+pub fn default_stat_graph() -> StatGraph {
+    let mut graph = StatGraph::new();
+    graph.derived.insert(
+        STAT_PHYSICAL_DAMAGE_BONUS,
+        DerivedStat {
+            stat: STAT_PHYSICAL_DAMAGE_BONUS,
+            dependencies: vec![STAT_STRENGTH],
+            contribution_per_point: vec![1],
+            flat_add: 0,
+        },
+    );
+    graph.derived.insert(
+        STAT_ATTACK_RATING,
+        DerivedStat {
+            stat: STAT_ATTACK_RATING,
+            dependencies: vec![STAT_DEXTERITY],
+            contribution_per_point: vec![5],
+            flat_add: 0,
+        },
+    );
+    graph.derived.insert(
+        STAT_DEFENSE,
+        DerivedStat {
+            stat: STAT_DEFENSE,
+            dependencies: vec![STAT_DEXTERITY],
+            contribution_per_point: vec![2],
+            flat_add: 0,
+        },
+    );
+    graph
+}
+
 #[cfg(test)]
 mod graph_tests {
     use super::*;
