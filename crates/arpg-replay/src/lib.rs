@@ -95,6 +95,7 @@ pub enum CommandPayload {
         c: u64,
     },
     NoOp,
+    SwapWeapons,
 }
 
 /// An in-progress or finalized replay.
@@ -159,6 +160,7 @@ impl Replay {
                 }
             }
             arpg_sim::ClientCommand::NoOp => CommandPayload::NoOp,
+            arpg_sim::ClientCommand::SwapWeapons => CommandPayload::SwapWeapons,
         };
         self.entries.push(ReplayEntry::Command {
             execute_tick: scheduled.execute_tick.0,
@@ -221,6 +223,7 @@ impl Replay {
                             out.extend_from_slice(&item.to_le_bytes());
                         }
                         CommandPayload::NoOp => out.push(3),
+                        CommandPayload::SwapWeapons => out.push(7),
                         CommandPayload::Trade { op, trade, encoded } => {
                             out.push(5);
                             out.push(*op);
@@ -331,6 +334,7 @@ impl Replay {
                         CommandPayload::Interact { target }
                     }
                     3 => CommandPayload::NoOp,
+                    7 => CommandPayload::SwapWeapons,
                     4 => {
                         let mut b = [0u8; 16];
                         b.copy_from_slice(r.take(16)?);
@@ -530,6 +534,7 @@ impl<'a> Replayer<'a> {
                             })
                         }
                         CommandPayload::NoOp => arpg_sim::ClientCommand::NoOp,
+                        CommandPayload::SwapWeapons => arpg_sim::ClientCommand::SwapWeapons,
                         CommandPayload::UseItem { item } => {
                             arpg_sim::ClientCommand::UseItem(arpg_sim::command::UseItemIntent {
                                 item: arpg_core::ItemId(*item),

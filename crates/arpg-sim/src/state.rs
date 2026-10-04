@@ -732,6 +732,9 @@ impl GameInstance {
                     {
                         self.handle_merchant(cmd.player, intent.clone());
                     }
+                    ClientCommand::SwapWeapons if self.state.players.contains_key(&cmd.player) => {
+                        self.swap_weapons(cmd.player);
+                    }
                     _ => {}
                 }
             }
@@ -2478,6 +2481,32 @@ impl GameInstance {
                 },
             );
         }
+    }
+
+    /// Weapon swap (SPEC.md section 78): exchange the active weapon
+    /// slots with the secondary loadout in one gameplay action; stats
+    /// recompute exactly once after the whole transaction.
+    pub fn swap_weapons(&mut self, player: PlayerId) {
+        use crate::item::EquipmentSlot as Slot;
+        let pairs = [
+            (
+                ItemLocation::Equipment(player, Slot::MainHand),
+                ItemLocation::Equipment(player, Slot::PrimarySet),
+            ),
+            (
+                ItemLocation::Equipment(player, Slot::OffHand),
+                ItemLocation::Equipment(player, Slot::SecondarySet),
+            ),
+        ];
+        for (active, secondary) in pairs {
+            let _ = self.inventory.swap_slots(active, secondary);
+        }
+        self.recompute_set_bonuses(player);
+        self.recompute_equipment_stats(player);
+        let entity = EntityId(player.0 as u64);
+        let key = self.next_event_key(entity);
+        self.event_buffer
+            .emit(key, GameEvent::ActionStarted(entity));
     }
 
     /// Interaction resolution (SPEC.md section 98): each intent is validated

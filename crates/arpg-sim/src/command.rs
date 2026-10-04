@@ -34,6 +34,9 @@ pub enum ClientCommand {
     /// Merchant services (SPEC.md sections 95-97): buy, sell, repair,
     /// gamble. Personal stock per player (section 95 v1 decision).
     Merchant(MerchantIntent),
+    /// Weapon swap (SPEC.md section 78): exchange the active weapon
+    /// slots with the secondary loadout in one gameplay action.
+    SwapWeapons,
     NoOp,
 }
 

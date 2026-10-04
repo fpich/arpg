@@ -274,3 +274,82 @@ fn stash_positions_are_distinct() {
     }
     assert_eq!(inv.len(), 3);
 }
+
+#[test]
+fn weapon_swap_exchanges_loadouts() {
+    let mut inst = arpg_sim::GameInstance::new(
+        std::sync::Arc::new(arpg_data::GameData::default()),
+        std::sync::Arc::new(arpg_rules::GameRules::default()),
+        [42u8; 32],
+    );
+    inst.add_player(arpg_core::PlayerId(1), WorldPos::new(0, 0));
+    let mk = |id: u128, def: u32| arpg_sim::ItemInstance {
+        id: arpg_core::ItemId(id),
+        definition: arpg_core::ItemDefId(def),
+        quality: arpg_sim::item::ItemQuality::Normal,
+        item_level: 1,
+        generation_seed: [0; 32],
+        affixes: smallvec::SmallVec::new(),
+        sockets: smallvec::SmallVec::new(),
+        durability: None,
+        flags: 0,
+    };
+    use arpg_sim::item::EquipmentSlot as Slot;
+    let primary = mk(1, 2001);
+    let secondary = mk(2, 2002);
+    inst.inventory
+        .spawn_ground(primary, arpg_core::LevelInstanceId(0), WorldPos::new(0, 0));
+    inst.inventory.spawn_ground(
+        secondary,
+        arpg_core::LevelInstanceId(0),
+        WorldPos::new(0, 0),
+    );
+    inst.pick_up_item(
+        arpg_core::PlayerId(1),
+        arpg_core::ItemId(1),
+        ItemLocation::Ground(arpg_core::LevelInstanceId(0), WorldPos::new(0, 0)),
+        ItemLocation::Equipment(arpg_core::PlayerId(1), Slot::MainHand),
+    )
+    .expect("equip primary");
+    inst.pick_up_item(
+        arpg_core::PlayerId(1),
+        arpg_core::ItemId(2),
+        ItemLocation::Ground(arpg_core::LevelInstanceId(0), WorldPos::new(0, 0)),
+        ItemLocation::Equipment(arpg_core::PlayerId(1), Slot::PrimarySet),
+    )
+    .expect("stash secondary");
+    // the swap exchanges the active and secondary weapons
+    inst.swap_weapons(arpg_core::PlayerId(1));
+    assert_eq!(
+        inst.inventory.location(arpg_core::ItemId(1)),
+        Some(ItemLocation::Equipment(
+            arpg_core::PlayerId(1),
+            Slot::PrimarySet
+        )),
+        "the first weapon moved to the secondary set"
+    );
+    assert_eq!(
+        inst.inventory.location(arpg_core::ItemId(2)),
+        Some(ItemLocation::Equipment(
+            arpg_core::PlayerId(1),
+            Slot::MainHand
+        )),
+        "the second weapon became active"
+    );
+    // swapping back restores the original loadout
+    inst.swap_weapons(arpg_core::PlayerId(1));
+    assert_eq!(
+        inst.inventory.location(arpg_core::ItemId(1)),
+        Some(ItemLocation::Equipment(
+            arpg_core::PlayerId(1),
+            Slot::MainHand
+        ))
+    );
+    assert_eq!(
+        inst.inventory.location(arpg_core::ItemId(2)),
+        Some(ItemLocation::Equipment(
+            arpg_core::PlayerId(1),
+            Slot::PrimarySet
+        ))
+    );
+}

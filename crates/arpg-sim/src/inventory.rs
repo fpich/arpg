@@ -118,6 +118,35 @@ impl InventorySystem {
         Ok(())
     }
 
+    /// Atomically swap the occupants of two equipment slots (SPEC.md
+    /// section 78): either both slots update or neither does. Empty
+    /// slots are allowed on either side.
+    pub fn swap_slots(&mut self, a: ItemLocation, b: ItemLocation) -> Result<(), ItemError> {
+        let a_item = self.slot_owner.get(&slot_key(a)).copied();
+        let b_item = self.slot_owner.get(&slot_key(b)).copied();
+        // apply both mutations or neither (section 85)
+        match (a_item, b_item) {
+            (Some(ida), Some(idb)) => {
+                self.slot_owner.insert(slot_key(a), idb);
+                self.slot_owner.insert(slot_key(b), ida);
+                self.locations.insert(ida, b);
+                self.locations.insert(idb, a);
+            }
+            (Some(ida), None) => {
+                self.slot_owner.remove(&slot_key(a));
+                self.slot_owner.insert(slot_key(b), ida);
+                self.locations.insert(ida, b);
+            }
+            (None, Some(idb)) => {
+                self.slot_owner.remove(&slot_key(b));
+                self.slot_owner.insert(slot_key(a), idb);
+                self.locations.insert(idb, a);
+            }
+            (None, None) => {}
+        }
+        Ok(())
+    }
+
     /// Simultaneous pickup resolution (SPEC.md section 86): the first valid
     /// pickup acquires the item; later ones get ItemUnavailable.
     pub fn pick_up(
