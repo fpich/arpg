@@ -75,7 +75,9 @@ impl ArrivalKind {
     pub fn of_command(envelope: &CommandEnvelope) -> ArrivalKind {
         match &envelope.command {
             ClientCommand::NoOp => ArrivalKind::NetworkMessage,
-            ClientCommand::Interact(_) => ArrivalKind::InventoryOperation,
+            ClientCommand::Interact(_) | ClientCommand::UseItem(_) => {
+                ArrivalKind::InventoryOperation
+            }
             _ => ArrivalKind::Command,
         }
     }

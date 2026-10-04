@@ -44,7 +44,12 @@ message CommandEnvelope {
     UseSkillCommand use_skill = 5;
     NoOpCommand no_op = 6;
     InteractCommand interact = 7;
+    UseItemCommand use_item = 8;
   }
+}
+
+message UseItemCommand {
+  uint64 item_id = 1;
 }
 
 message MoveCommand {

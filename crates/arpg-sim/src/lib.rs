@@ -26,7 +26,7 @@ pub use actor::{ActionTiming, ActiveAction, Actor, InterruptPriority, Target};
 pub use ai::{AiBrain, AiCommand, AiWorldView};
 pub use command::{
     Admission, ClientCommand, CommandEnvelope, InteractIntent, MoveIntent, MovementMode,
-    UseSkillIntent,
+    UseItemIntent, UseSkillIntent,
 };
 pub use damage::{
     DamagePacket, DamageRange, DotAccumulator, PoisonPayload, Resistances, RollAmounts,

@@ -30,6 +30,11 @@ pub fn wire_to_sim(envelope: &msg::CommandEnvelope) -> Option<CommandEnvelope> {
             })
         }
         Some(msg::command_envelope::Command::NoOp(_)) => ClientCommand::NoOp,
+        Some(msg::command_envelope::Command::UseItem(u)) => {
+            ClientCommand::UseItem(arpg_sim::UseItemIntent {
+                item: arpg_core::ItemId(u.item_id as u128),
+            })
+        }
         None => return None,
     };
     Some(CommandEnvelope {
