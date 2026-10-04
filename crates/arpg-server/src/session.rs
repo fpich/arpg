@@ -26,6 +26,8 @@ pub struct Session {
     pub protocol_version: u32,
     pub last_processed_sequence: u32,
     pub joined_tick: Tick,
+    /// Remaining ticks of the reconnection grace window (section 146).
+    grace_remaining_ticks: u32,
 }
 
 impl Session {
@@ -36,6 +38,7 @@ impl Session {
             protocol_version: 0,
             last_processed_sequence: 0,
             joined_tick: Tick(0),
+            grace_remaining_ticks: 0,
         }
     }
 
@@ -61,11 +64,48 @@ impl Session {
         self.last_processed_sequence = envelope.sequence;
     }
 
+    /// Enter the reconnection grace window (SPEC.md section 146): the
+    /// character stays in the world, no new actions, engaged actions
+    /// finish normally, the player can be attacked. Policy: 30 seconds,
+    /// overridable.
     pub fn disconnect(&mut self) {
+        self.disconnect_with_policy(Self::DEFAULT_RECONNECT_GRACE_TICKS);
+    }
+
+    pub fn disconnect_with_policy(&mut self, grace_ticks: u32) {
+        self.grace_remaining_ticks = grace_ticks.max(1);
         self.state = SessionState::DisconnectedGrace;
+    }
+
+    /// A reconnecting client resumes its session: back to Running with the
+    /// grace window cleared (section 146).
+    pub fn reconnect(&mut self) {
+        self.grace_remaining_ticks = 0;
+        self.state = SessionState::Running;
+    }
+
+    /// Advance the grace window by one tick; returns true when the grace
+    /// expired (definitive disconnection, section 147).
+    pub fn tick_grace(&mut self) -> bool {
+        if self.state != SessionState::DisconnectedGrace {
+            return false;
+        }
+        if self.grace_remaining_ticks > 0 {
+            self.grace_remaining_ticks -= 1;
+        }
+        self.grace_remaining_ticks == 0
+    }
+
+    pub fn grace_remaining_ticks(&self) -> u32 {
+        self.grace_remaining_ticks
     }
 
     pub fn close(&mut self) {
         self.state = SessionState::Closed;
     }
+}
+
+impl Session {
+    /// Default reconnection policy (section 146): 30 seconds at 25 ticks/s.
+    pub const DEFAULT_RECONNECT_GRACE_TICKS: u32 = 30 * 25;
 }

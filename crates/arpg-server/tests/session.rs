@@ -99,3 +99,27 @@ fn snapshot_contains_only_client_visible_state() {
     let decoded = msg::Snapshot::decode(bytes.as_slice()).unwrap();
     assert_eq!(decoded.players[0].life, 90);
 }
+
+#[test]
+fn reconnection_grace_window_resumes_or_expires() {
+    use arpg_server::session::{Session, SessionState};
+    let mut s = Session::new(PlayerId(1));
+    s.handle_join_accepted(Tick(1));
+    assert!(s.is_command_accepted());
+    // drop: 30s policy at 25 tps = 750 ticks
+    s.disconnect();
+    assert_eq!(s.state, SessionState::DisconnectedGrace);
+    assert!(!s.is_command_accepted(), "no new actions during grace");
+    // a reconnect during the window resumes the session
+    s.reconnect();
+    assert_eq!(s.state, SessionState::Running);
+    assert!(s.is_command_accepted());
+    // a definitive drop: custom policy of 3 ticks, then expiry
+    s.disconnect_with_policy(3);
+    assert_eq!(s.grace_remaining_ticks(), 3);
+    assert!(!s.tick_grace());
+    assert!(!s.tick_grace());
+    assert!(s.tick_grace(), "grace expired: definitive disconnect");
+    s.close();
+    assert_eq!(s.state, SessionState::Closed);
+}
