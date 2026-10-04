@@ -28,6 +28,18 @@ pub struct ItemInstance {
     pub sockets: SmallVec<[ItemId; 6]>,
     pub durability: Option<u16>,
     pub flags: u32,
+    /// Skill charges (SPEC.md section 79): an item may provide a skill
+    /// with a current and maximum charge count. Charges are persistent
+    /// state on the instance; `Recharge` at a merchant restores them.
+    pub charges: Option<ChargeState>,
+}
+
+/// Charge pool carried by a charged item (SPEC.md section 79).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChargeState {
+    pub skill: arpg_core::SkillId,
+    pub current: u16,
+    pub max: u16,
 }
 
 /// Exactly one location per ItemId (SPEC.md section 84).

@@ -462,6 +462,7 @@ mod tests {
             sockets: Default::default(),
             durability: Some(50),
             flags: 0,
+            charges: None,
         };
         let item_id = item.id;
         inv.spawn_ground(
@@ -530,6 +531,7 @@ mod tests {
             sockets: Default::default(),
             durability: Some(50),
             flags: 0,
+            charges: None,
         };
         let item_id = item.id;
         inv.spawn_ground(

@@ -561,3 +561,84 @@ fn corpse_explosion_consumes_nearest_corpse() {
         "a consumed corpse fuels no second explosion"
     );
 }
+
+#[test]
+fn charged_item_spends_one_charge_per_cast() {
+    let mut inst = setup();
+    inst.register_skill(fireball()).unwrap();
+    inst.add_player(PlayerId(1), WorldPos::new(0, 0));
+    let charged = arpg_sim::ItemInstance {
+        id: arpg_core::ItemId(1),
+        definition: arpg_core::ItemDefId(9),
+        quality: arpg_sim::item::ItemQuality::Magic,
+        item_level: 10,
+        generation_seed: [3; 32],
+        affixes: smallvec::SmallVec::new(),
+        sockets: smallvec::SmallVec::new(),
+        durability: None,
+        flags: 0,
+        charges: Some(arpg_sim::item::ChargeState {
+            skill: SkillId(1),
+            current: 3,
+            max: 5,
+        }),
+    };
+    inst.inventory
+        .spawn_ground(charged, arpg_core::LevelInstanceId(0), WorldPos::new(0, 0));
+    inst.pick_up_item(
+        PlayerId(1),
+        arpg_core::ItemId(1),
+        arpg_sim::ItemLocation::Ground(arpg_core::LevelInstanceId(0), WorldPos::new(0, 0)),
+        arpg_sim::ItemLocation::Equipment(PlayerId(1), arpg_sim::EquipmentSlot::MainHand),
+    )
+    .expect("equip charged item");
+    assert_eq!(inst.item_granted_skills(PlayerId(1)), vec![SkillId(1)]);
+    inst.submit_command(skill_cmd(
+        PlayerId(1),
+        1,
+        SkillId(1),
+        Some(WorldPos::new(64, 0)),
+    ));
+    for _ in 0..8 {
+        inst.tick();
+    }
+    let charges = inst
+        .inventory
+        .get(arpg_core::ItemId(1))
+        .unwrap()
+        .charges
+        .unwrap();
+    assert_eq!(charges.current, 2, "one charge spent on cast");
+}
+
+#[test]
+fn exhausted_charges_stop_supplying_the_skill() {
+    let mut inv = arpg_sim::InventorySystem::new();
+    inv.spawn_ground(
+        arpg_sim::ItemInstance {
+            id: arpg_core::ItemId(4),
+            definition: arpg_core::ItemDefId(9),
+            quality: arpg_sim::item::ItemQuality::Magic,
+            item_level: 10,
+            generation_seed: [3; 32],
+            affixes: smallvec::SmallVec::new(),
+            sockets: smallvec::SmallVec::new(),
+            durability: None,
+            flags: 0,
+            charges: Some(arpg_sim::item::ChargeState {
+                skill: SkillId(7),
+                current: 0,
+                max: 4,
+            }),
+        },
+        arpg_core::LevelInstanceId(0),
+        WorldPos::new(0, 0),
+    );
+    assert_eq!(inv.consume_charge(arpg_core::ItemId(4)), None);
+    inv.recharge_item(arpg_core::ItemId(4));
+    assert_eq!(
+        inv.consume_charge(arpg_core::ItemId(4)),
+        Some(SkillId(7)),
+        "recharging restores spendable charges"
+    );
+}

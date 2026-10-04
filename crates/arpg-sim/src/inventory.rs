@@ -46,6 +46,27 @@ impl InventorySystem {
         self.items.get_mut(&id).map(|i| i.durability = Some(value))
     }
 
+    /// Consume one charge from a charged item (SPEC.md section 79).
+    /// Returns the granted skill when a charge was available and spent.
+    pub fn consume_charge(&mut self, id: ItemId) -> Option<arpg_core::SkillId> {
+        let item = self.items.get_mut(&id)?;
+        let charges = item.charges.as_mut()?;
+        if charges.current == 0 {
+            return None;
+        }
+        charges.current -= 1;
+        Some(charges.skill)
+    }
+
+    /// Restore charges to maximum (SPEC.md section 79: `Recharge`).
+    /// Returns the number of missing charges that were restored.
+    pub fn recharge_item(&mut self, id: ItemId) -> Option<u64> {
+        let charges = self.items.get_mut(&id)?.charges.as_mut()?;
+        let missing = (charges.max.saturating_sub(charges.current)) as u64;
+        charges.current = charges.max;
+        Some(missing)
+    }
+
     pub fn get(&self, id: ItemId) -> Option<&ItemInstance> {
         self.items.get(&id)
     }

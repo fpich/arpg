@@ -203,6 +203,7 @@ impl Merchant {
             sockets: Default::default(),
             durability: Some(50),
             flags: 0,
+            charges: None,
         })
     }
 }

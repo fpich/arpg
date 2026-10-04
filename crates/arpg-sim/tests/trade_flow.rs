@@ -39,6 +39,7 @@ fn give_item(inst: &mut GameInstance, def: ItemDefId) -> ItemId {
         sockets: smallvec::SmallVec::new(),
         durability: None,
         flags: 0,
+        charges: None,
     };
     inst.inventory
         .spawn_ground(item, arpg_core::LevelInstanceId(0), WorldPos::new(0, 0));

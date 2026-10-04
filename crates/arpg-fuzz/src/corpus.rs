@@ -29,6 +29,7 @@ pub fn fuzz_inventory(seed: u64, iterations: u32) -> Result<(), arpg_sim::ItemEr
             sockets: Default::default(),
             durability: Some(50),
             flags: 0,
+            charges: None,
         };
         inv.spawn_ground(
             item,

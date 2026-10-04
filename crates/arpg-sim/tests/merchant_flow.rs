@@ -119,6 +119,7 @@ fn sell_credits_gold_and_removes_item() {
         sockets: smallvec::SmallVec::new(),
         durability: None,
         flags: 0,
+        charges: None,
     };
     inst.inventory
         .spawn_ground(item, arpg_core::LevelInstanceId(0), WorldPos::new(0, 0));
@@ -165,6 +166,7 @@ fn repair_restores_durability_for_gold() {
         sockets: smallvec::SmallVec::new(),
         durability: Some(40),
         flags: 0,
+        charges: None,
     };
     inst.inventory
         .spawn_ground(item, arpg_core::LevelInstanceId(0), WorldPos::new(0, 0));
@@ -253,4 +255,65 @@ fn merchant_commands_are_deterministic() {
         inst.state.state_hash()
     };
     assert_eq!(run(), run());
+}
+
+#[test]
+fn recharge_restores_charges_for_gold() {
+    let mut inst = game();
+    inst.economy.gold.insert(
+        PlayerId(1),
+        Gold {
+            carried: 200,
+            stash: 0,
+        },
+    );
+    let charged = ItemInstance {
+        id: ItemId(77),
+        definition: ItemDefId(1001),
+        quality: ItemQuality::Magic,
+        item_level: 10,
+        generation_seed: [5; 32],
+        affixes: smallvec::SmallVec::new(),
+        sockets: smallvec::SmallVec::new(),
+        durability: None,
+        flags: 0,
+        charges: Some(arpg_sim::item::ChargeState {
+            skill: arpg_core::SkillId(9),
+            current: 1,
+            max: 4,
+        }),
+    };
+    inst.inventory
+        .spawn_ground(charged, arpg_core::LevelInstanceId(0), WorldPos::new(0, 0));
+    inst.pick_up_item(
+        PlayerId(1),
+        ItemId(77),
+        ItemLocation::Ground(arpg_core::LevelInstanceId(0), WorldPos::new(0, 0)),
+        ItemLocation::PlayerInventory(PlayerId(1), arpg_sim::GridPos { x: 0, y: 0 }),
+    )
+    .expect("take the charged item");
+    submit(
+        &mut inst,
+        1,
+        MerchantIntent::Recharge {
+            merchant: 1,
+            item: ItemId(77),
+        },
+    );
+    flush(&mut inst);
+    let charges = inst.inventory.get(ItemId(77)).unwrap().charges.unwrap();
+    assert_eq!(charges.current, 4, "charges restored to maximum");
+    // 3 missing points x 10 gold per point
+    assert_eq!(inst.economy.gold_of(PlayerId(1)).carried, 170);
+    // recharging again costs nothing: already full
+    submit(
+        &mut inst,
+        2,
+        MerchantIntent::Recharge {
+            merchant: 1,
+            item: ItemId(77),
+        },
+    );
+    flush(&mut inst);
+    assert_eq!(inst.economy.gold_of(PlayerId(1)).carried, 170);
 }

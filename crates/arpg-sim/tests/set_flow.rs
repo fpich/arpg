@@ -28,6 +28,7 @@ fn equip_item(inst: &mut GameInstance, def: ItemDefId, slot: EquipmentSlot) {
         sockets: smallvec::SmallVec::new(),
         durability: None,
         flags: 0,
+        charges: None,
     };
     inst.inventory
         .spawn_ground(item, arpg_core::LevelInstanceId(0), WorldPos::new(0, 0));
@@ -120,6 +121,7 @@ fn equipped_affixes_fold_into_player_stats() {
         sockets: smallvec::SmallVec::new(),
         durability: None,
         flags: 0,
+        charges: None,
     };
     inst.inventory
         .spawn_ground(item, arpg_core::LevelInstanceId(0), WorldPos::new(0, 0));

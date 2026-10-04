@@ -152,6 +152,7 @@ fn inventory_move_is_transactional() {
         sockets: Default::default(),
         durability: None,
         flags: 0,
+        charges: None,
     };
     let level = LevelInstanceId(1);
     inv.spawn_ground(item, level, WorldPos::new(0, 0));
@@ -186,6 +187,7 @@ fn simultaneous_pickup_first_wins() {
         sockets: Default::default(),
         durability: None,
         flags: 0,
+        charges: None,
     };
     let level = LevelInstanceId(1);
     inv.spawn_ground(item, level, WorldPos::new(0, 0));
@@ -221,6 +223,7 @@ fn slot_conflicts_are_rejected() {
             sockets: Default::default(),
             durability: None,
             flags: 0,
+            charges: None,
         };
         inv.spawn_ground(item, LevelInstanceId(1), WorldPos::new(0, 0));
     }
@@ -254,6 +257,7 @@ fn stash_positions_are_distinct() {
             sockets: Default::default(),
             durability: None,
             flags: 0,
+            charges: None,
         };
         inv.spawn_ground(item, level, WorldPos::new(i as i32 * 256, 0));
         let ground = ItemLocation::Ground(level, WorldPos::new(i as i32 * 256, 0));
@@ -293,6 +297,7 @@ fn weapon_swap_exchanges_loadouts() {
         sockets: smallvec::SmallVec::new(),
         durability: None,
         flags: 0,
+        charges: None,
     };
     use arpg_sim::item::EquipmentSlot as Slot;
     let primary = mk(1, 2001);

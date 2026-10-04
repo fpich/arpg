@@ -57,6 +57,12 @@ pub enum MerchantIntent {
         merchant: u64,
         item: Option<arpg_core::ItemId>,
     },
+    /// Recharge (SPEC.md section 79): restore a charged item's skill
+    /// charges; cost scales with the number of missing charges.
+    Recharge {
+        merchant: u64,
+        item: arpg_core::ItemId,
+    },
     Gamble {
         merchant: u64,
         offer: u32,

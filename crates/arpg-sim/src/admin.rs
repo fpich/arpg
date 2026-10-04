@@ -111,6 +111,7 @@ impl GameInstance {
                     sockets: smallvec::SmallVec::new(),
                     durability: None,
                     flags: 0,
+                    charges: None,
                 };
                 let pos = self
                     .state

@@ -610,6 +610,7 @@ pub fn mint_quest_item(
         sockets: Default::default(),
         durability: Some(50),
         flags: 0,
+        charges: None,
     }
 }
 

@@ -150,6 +150,9 @@ impl Replay {
                     MerchantIntent::Gamble { merchant, offer } => {
                         (3u8, *merchant, *offer as u64, 0, 0)
                     }
+                    MerchantIntent::Recharge { merchant, item } => {
+                        (4u8, *merchant, item.0 as u64, 0, 0)
+                    }
                 };
                 CommandPayload::Merchant {
                     op,
@@ -571,6 +574,10 @@ impl<'a> Replayer<'a> {
                                     } else {
                                         Some(arpg_core::ItemId(*a as u128))
                                     },
+                                },
+                                4 => MerchantIntent::Recharge {
+                                    merchant: *merchant,
+                                    item: arpg_core::ItemId(*a as u128),
                                 },
                                 _ => MerchantIntent::Gamble {
                                     merchant: *merchant,

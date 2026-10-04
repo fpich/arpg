@@ -578,6 +578,11 @@ impl GameInstance {
         }
         for (id, loc) in self.inventory.iter_locations() {
             hash_input.extend_from_slice(&id.0.to_le_bytes());
+            if let Some(charges) = self.inventory.get(id).and_then(|i| i.charges) {
+                hash_input.extend_from_slice(&charges.skill.0.to_le_bytes());
+                hash_input.extend_from_slice(&charges.current.to_le_bytes());
+                hash_input.extend_from_slice(&charges.max.to_le_bytes());
+            }
             match loc {
                 ItemLocation::PlayerInventory(p, g) => {
                     hash_input.extend_from_slice(&p.0.to_le_bytes());
@@ -1121,6 +1126,27 @@ impl GameInstance {
                     self.inventory.set_durability(target, 100);
                 }
             }
+            MerchantIntent::Recharge { merchant, item } => {
+                let owned = self
+                    .inventory
+                    .location(item)
+                    .is_some_and(|loc| matches!(loc, crate::item::ItemLocation::PlayerInventory(p, _) if p == player));
+                if !owned {
+                    return;
+                }
+                let Some(missing) = self.inventory.recharge_item(item) else {
+                    return;
+                };
+                if missing == 0 {
+                    return;
+                }
+                let cost = self.economy.merchant(merchant).recharge_cost(missing);
+                let mut gold = self.economy.gold_of(player);
+                if gold.carried >= cost {
+                    gold.carried -= cost;
+                    self.economy.gold.insert(player, gold);
+                }
+            }
             MerchantIntent::Gamble { merchant, offer } => {
                 let mut gold = self.economy.gold_of(player);
                 let result =
@@ -1159,6 +1185,7 @@ impl GameInstance {
             sockets: smallvec::SmallVec::new(),
             durability: None,
             flags: 0,
+            charges: None,
         };
         let pos = self
             .state
@@ -1660,6 +1687,23 @@ impl GameInstance {
             };
             action.skill.unwrap_or(arpg_core::SkillId(0))
         };
+        // Item-granted skills (SPEC.md section 79): each cast of a skill
+        // supplied by a charged equipped item spends one charge.
+        let charged_item = self
+            .inventory
+            .iter_locations()
+            .find(|(item_id, loc)| {
+                matches!(loc, crate::item::ItemLocation::Equipment(p, _) if p == &player_id)
+                    && self
+                        .inventory
+                        .get(*item_id)
+                        .and_then(|i| i.charges)
+                        .is_some_and(|c| c.skill == skill_id)
+            })
+            .map(|(item_id, _)| item_id);
+        if let Some(item_id) = charged_item {
+            self.inventory.consume_charge(item_id);
+        }
         let Some(def) = self.skills.get(&skill_id).cloned() else {
             return;
         };
@@ -2481,6 +2525,22 @@ impl GameInstance {
                 },
             );
         }
+    }
+
+    /// Item-granted skills (SPEC.md section 79): the skills an equipped
+    /// item provides through its charge pool.
+    pub fn item_granted_skills(&self, player: PlayerId) -> Vec<arpg_core::SkillId> {
+        let mut skills: Vec<arpg_core::SkillId> = Vec::new();
+        for (item_id, loc) in self.inventory.iter_locations() {
+            if matches!(loc, crate::item::ItemLocation::Equipment(p, _) if *p == player) {
+                if let Some(c) = self.inventory.get(item_id).and_then(|i| i.charges) {
+                    if !skills.contains(&c.skill) {
+                        skills.push(c.skill);
+                    }
+                }
+            }
+        }
+        skills
     }
 
     /// Weapon swap (SPEC.md section 78): exchange the active weapon

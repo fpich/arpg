@@ -276,6 +276,7 @@ mod tests {
             sockets: smallvec::smallvec![],
             durability: None,
             flags: 1,
+            charges: None,
         };
         sys.declare_sockets(ItemId(id), capacity);
         (item, sys)

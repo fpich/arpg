@@ -58,6 +58,7 @@ impl LootRoller {
                     sockets: Default::default(),
                     durability: Some(50),
                     flags: 0,
+                    charges: None,
                 });
                 self.next_item_id += 1;
                 break;
