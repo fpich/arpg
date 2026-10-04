@@ -162,6 +162,7 @@ dependencies = [
  "arpg-replay",
  "arpg-rules",
  "arpg-sim",
+ "arpg-world",
 ]
 
 [[package]]

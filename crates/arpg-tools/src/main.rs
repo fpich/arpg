@@ -1,3 +1,4 @@
+mod map;
 mod play;
 
 use std::sync::Arc;

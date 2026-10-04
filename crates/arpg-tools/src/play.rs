@@ -85,6 +85,7 @@ fn describe_event(e: &arpg_core::GameEvent) -> Option<String> {
 fn help() {
     println!("commands:");
     println!("  status                    players, monsters, tick");
+    println!("  map                       ASCII map centered on you");
     println!("  move <x> <y>             walk to tile coordinates (tiles)");
     println!("  skill [id]                cast a skill (default {DEFAULT_SKILL} = Barbarian Bash)");
     println!(
@@ -106,8 +107,18 @@ pub fn play() {
     inst.set_ai_brain(Box::new(arpg_ai::HfsmBrain::new(
         arpg_ai::AiParams::default(),
     )));
-    inst.add_player(PLAYER, WorldPos::ZERO);
-    for pos in [(6, 0), (8, 3), (-5, 2)] {
+    let (collision, rooms, objects) =
+        arpg_world::generate_level(inst.state.seed(), 1).expect("level generation");
+    let level = arpg_world::LevelInstance {
+        id: arpg_core::LevelInstanceId(1),
+        definition: arpg_core::LevelDefId(1),
+        collision,
+        rooms,
+        objects,
+    };
+    inst.level = Some(level);
+    inst.add_player(PLAYER, WorldPos::new(4 * 256, 4 * 256));
+    for pos in [(10, 4), (14, 5), (18, 4)] {
         inst.spawn_monster_def(
             arpg_core::MonsterDefId(DEFAULT_MONSTER),
             WorldPos::new(pos.0 * 256, pos.1 * 256),
@@ -162,6 +173,15 @@ pub fn play() {
         match cmd {
             "help" => help(),
             "status" => print_status(&g),
+            "map" => {
+                let center = g
+                    .state
+                    .players
+                    .get(&PLAYER)
+                    .map(|p| p.pos)
+                    .unwrap_or(WorldPos::ZERO);
+                print!("{}", crate::map::render(&g, center));
+            }
             "quit" | "exit" => {
                 running.store(false, Ordering::Relaxed);
                 println!("bye");
@@ -188,6 +208,10 @@ pub fn play() {
                     }),
                 });
                 println!("moving to ({x},{y}) tiles");
+                {
+                    let center = WorldPos::new(x * 256, y * 256);
+                    print!("{}", crate::map::render(&g, center));
+                }
             }
             "skill" => {
                 let id: u32 = rest
@@ -229,13 +253,19 @@ pub fn play() {
             "interact" => {
                 seq += 1;
                 let tick = g.state.tick;
+                let p_pos = g
+                    .state
+                    .players
+                    .get(&PLAYER)
+                    .map(|p| p.pos)
+                    .unwrap_or(WorldPos::ZERO);
+                let obj_target =
+                    crate::map::nearest_object(&g, p_pos).unwrap_or(arpg_core::ObjectId(0));
                 g.submit_command(CommandEnvelope {
                     sequence: seq,
                     client_tick: tick,
                     player: PLAYER,
-                    command: ClientCommand::Interact(InteractIntent {
-                        target: arpg_core::ObjectId(0),
-                    }),
+                    command: ClientCommand::Interact(InteractIntent { target: obj_target }),
                 });
                 println!("interact queued");
             }

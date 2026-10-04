@@ -12,4 +12,5 @@ arpg-rules.workspace = true
 arpg-sim.workspace = true
 arpg-replay.workspace = true
 arpg-ai.workspace = true
+arpg-world.workspace = true
 arpg-metrics.workspace = true
