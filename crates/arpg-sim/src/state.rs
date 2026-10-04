@@ -173,6 +173,13 @@ pub struct GameInstance {
     /// leech, thorns. Derived from gear in gameplay terms; stored per
     /// player and hashed canonically.
     pub secondary_profiles: BTreeMap<PlayerId, crate::secondary::SecondaryProfile>,
+    /// Cast-speed bonuses per player in basis points (SPEC.md section
+    /// 56): raw bonuses curved through the cast system before they
+    /// shrink cast times.
+    pub cast_speed_bonus_bp: BTreeMap<PlayerId, i64>,
+    /// Attack-speed bonuses per player in basis points (SPEC.md
+    /// section 56).
+    pub attack_speed_bonus_bp: BTreeMap<PlayerId, i64>,
     /// Runtime metrics (SPEC.md section 190). POLICY domain: never part of
     /// the state hash, never alters gameplay. Optional so replays and
     /// tests can run without a collector.
@@ -241,6 +248,8 @@ impl GameInstance {
             economy: crate::economy::Economy::new(),
             sets: crate::set::SetSystem::new(),
             secondary_profiles: BTreeMap::new(),
+            cast_speed_bonus_bp: BTreeMap::new(),
+            attack_speed_bonus_bp: BTreeMap::new(),
             metrics: None,
             traces: crate::trace::TraceBuffer::new(),
             states: crate::states::StateStore::new(),
@@ -533,6 +542,14 @@ impl GameInstance {
         self.summons.hash_bytes(&mut hash_input);
         self.sockets.hash_bytes(&mut hash_input);
         self.auras.hash_bytes(&mut hash_input);
+        for (player, bonus) in &self.cast_speed_bonus_bp {
+            hash_input.extend_from_slice(&player.0.to_le_bytes());
+            hash_input.extend_from_slice(&bonus.to_le_bytes());
+        }
+        for (player, bonus) in &self.attack_speed_bonus_bp {
+            hash_input.extend_from_slice(&player.0.to_le_bytes());
+            hash_input.extend_from_slice(&bonus.to_le_bytes());
+        }
         for (player, prof) in &self.secondary_profiles {
             hash_input.extend_from_slice(&player.0.to_le_bytes());
             hash_input.extend_from_slice(&prof.critical_strike_bp.to_le_bytes());
@@ -1321,13 +1338,23 @@ impl GameInstance {
         target: Option<WorldPos>,
         tick: Tick,
     ) {
+        // Cast speed (SPEC.md section 56): the raw bonus passes the
+        // shared diminishing curve before shrinking the cast time.
+        let cast_bonus = self.cast_speed_bonus_bp.get(&player).copied().unwrap_or(0);
         let timing = match self.skills.get(&skill) {
             Some(def) => match def.timing {
-                crate::skill::TimingFormula::Ticks(t) => crate::actor::ActionTiming {
-                    windup_ticks: t,
-                    impact_tick: t,
-                    recovery_ticks: t,
-                },
+                crate::skill::TimingFormula::Ticks(t) => {
+                    let effective = crate::speeds::cast_ticks(
+                        t,
+                        cast_bonus,
+                        &crate::speeds::SpeedSystems::default(),
+                    );
+                    crate::actor::ActionTiming {
+                        windup_ticks: effective,
+                        impact_tick: effective,
+                        recovery_ticks: effective,
+                    }
+                }
                 crate::skill::TimingFormula::Instant => crate::actor::ActionTiming {
                     windup_ticks: 1,
                     impact_tick: 1,

@@ -19,6 +19,7 @@ pub mod set;
 pub mod skill;
 pub mod social;
 pub mod socket;
+pub mod speeds;
 pub mod stat;
 pub mod state;
 pub mod states;

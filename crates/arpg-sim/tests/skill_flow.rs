@@ -268,3 +268,34 @@ fn secondary_knockback_pushes_monster_away() {
     let pos_after = inst.monsters.get(&monster).unwrap().pos;
     assert!(pos_after.x > pos_before.x, "knockback must push away");
 }
+
+#[test]
+fn cast_speed_bonus_shrinks_cast_time() {
+    let mut inst = setup();
+    // fireball has a 2-tick cast; a big bonus must reach 1 tick
+    inst.register_skill(fireball()).unwrap();
+    inst.add_player(PlayerId(1), WorldPos::new(0, 0));
+    inst.cast_speed_bonus_bp.insert(PlayerId(1), 10_000);
+    let monster = inst.spawn_monster(WorldPos::new(256, 0));
+    let life_before = inst.monsters.get(&monster).unwrap().life;
+    inst.submit_command(skill_cmd(
+        PlayerId(1),
+        1,
+        SkillId(1),
+        Some(WorldPos::new(256, 0)),
+    ));
+    // with the bonus the cast resolves faster than the 8-tick baseline
+    let mut damaged_early = None;
+    for t in 0..8 {
+        inst.tick();
+        let life = inst.monsters.get(&monster).map(|m| m.life).unwrap_or(0);
+        if life < life_before {
+            damaged_early = Some(t);
+            break;
+        }
+    }
+    assert!(
+        damaged_early.is_some(),
+        "cast speed must accelerate the impact"
+    );
+}
