@@ -123,3 +123,46 @@ fn reconnection_grace_window_resumes_or_expires() {
     s.close();
     assert_eq!(s.state, SessionState::Closed);
 }
+
+#[tokio::test]
+async fn server_guard_tracks_lifecycle_across_join_and_leave() {
+    use arpg_server::policy::{GameLifecycle, ServerPolicy};
+    use std::sync::{Arc, Mutex};
+
+    let game = {
+        let data = Arc::new(arpg_data::GameData::default());
+        let rules = Arc::new(arpg_rules::GameRules::default());
+        arpg_sim::GameInstance::new(data, rules, [31u8; 32])
+    };
+    let game = Arc::new(Mutex::new(game));
+    let (server, _cert) = arpg_server::quic::GameServer::bind_loopback(game).unwrap();
+    let guard = server.guard();
+
+    // a joining player activates the game
+    {
+        let mut g = guard.lock().unwrap();
+        g.observe_players(1);
+        assert_eq!(g.lifecycle(), GameLifecycle::Active);
+    }
+    // everyone leaves: empty grace starts
+    {
+        let mut g = guard.lock().unwrap();
+        g.observe_players(0);
+        assert_eq!(g.lifecycle(), GameLifecycle::EmptyGrace);
+    }
+    // the host loop ticks the guard; expiry reports the destroy tick
+    let mut expired = false;
+    {
+        let mut g = guard.lock().unwrap();
+        // default policy is 15_000 ticks: simulate the tail of the window
+        for _ in 0..15_000 {
+            if g.tick_empty() {
+                expired = true;
+                break;
+            }
+        }
+    }
+    assert!(expired, "guard reports the expiry tick");
+    assert_eq!(guard.lock().unwrap().lifecycle(), GameLifecycle::Destroyed);
+    let _ = ServerPolicy::default();
+}

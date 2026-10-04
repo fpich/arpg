@@ -47,7 +47,24 @@ pub enum SkillOp {
     /// unconsumed corpse to the target and adds its damage to the
     /// outcome; without a corpse the op contributes nothing.
     ConsumeCorpse(i64),
+    /// Native effect (SPEC.md section 38): effects unreasonable to express
+    /// in the IR. Every native id must have a documented justification, a
+    /// dedicated unit test, deterministic input/output, no I/O and no
+    /// implicit RNG. Target: >= 90% of skills without any native effect.
+    Native(NativeEffectId),
     NoOp,
+}
+
+/// Registered native effects (SPEC.md section 38).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum NativeEffectId {
+    /// Chain lightning arc (sections 36, 38): the number of chained
+    /// targets and their order depend on live entity geometry around the
+    /// impact point - unreasonable to express as a static IR program.
+    /// Justification: dynamic multi-target selection. Deterministic:
+    /// engine enumerates candidates in canonical entity-id order and the
+    /// callback folds them into the outcome. No I/O, no RNG.
+    ChainLightning { max_targets: u8 },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -129,6 +146,7 @@ pub fn execute_program(
     intent: &UseSkillIntent,
     mut spawn_missile: impl FnMut(u32),
     mut consume_corpse: impl FnMut(i64) -> bool,
+    mut native: impl FnMut(NativeEffectId, &mut SkillOutcome),
 ) -> SkillOutcome {
     let mut outcome = SkillOutcome::default();
     execute_ops(
@@ -137,6 +155,7 @@ pub fn execute_program(
         &mut outcome,
         &mut spawn_missile,
         &mut consume_corpse,
+        &mut native,
     );
     outcome
 }
@@ -147,12 +166,18 @@ fn execute_ops(
     outcome: &mut SkillOutcome,
     spawn_missile: &mut impl FnMut(u32),
     consume_corpse: &mut impl FnMut(i64) -> bool,
+    native: &mut impl FnMut(NativeEffectId, &mut SkillOutcome),
 ) {
     for op in ops {
         match op {
-            SkillOp::Sequence(inner) => {
-                execute_ops(inner, intent, outcome, spawn_missile, consume_corpse)
-            }
+            SkillOp::Sequence(inner) => execute_ops(
+                inner,
+                intent,
+                outcome,
+                spawn_missile,
+                consume_corpse,
+                native,
+            ),
             SkillOp::DealDamage(packet) => {
                 outcome.damage = outcome.damage.saturating_add(sum_packet_mid(packet));
             }
@@ -175,6 +200,11 @@ fn execute_ops(
                 if consume_corpse(*damage) {
                     outcome.damage = outcome.damage.saturating_add(*damage);
                 }
+            }
+            SkillOp::Native(effect) => {
+                // section 38: the engine resolves the native effect and
+                // folds its contribution into the outcome deterministically
+                native(*effect, outcome);
             }
             SkillOp::NoOp => {}
         }

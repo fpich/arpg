@@ -1753,6 +1753,7 @@ impl GameInstance {
                 }
                 _ => false,
             },
+            |effect, outcome| self.resolve_native_effect(effect, outcome, target_pos),
         );
         if corpse_spent {
             if let Some(id) = corpse_available {
@@ -2315,6 +2316,44 @@ impl GameInstance {
 
     /// Last accepted command sequence for a player: the ack that lets a
     /// retransmitting client stop (SPEC section 186).
+    /// Resolve a native effect (SPEC.md section 38). The engine owns the
+    /// entity geometry; candidates are enumerated in canonical entity-id
+    /// order so the fold is deterministic regardless of map iteration.
+    fn resolve_native_effect(
+        &self,
+        effect: crate::skill::NativeEffectId,
+        outcome: &mut crate::skill::SkillOutcome,
+        target: Option<WorldPos>,
+    ) {
+        match effect {
+            crate::skill::NativeEffectId::ChainLightning { max_targets } => {
+                let Some(target_pos) = target else { return };
+                // canonical order: entity id ascending
+                let mut candidates: Vec<(EntityId, i64)> = self
+                    .monsters
+                    .iter()
+                    .filter(|(id, m)| {
+                        m.life > 0
+                            && (m.pos.x - target_pos.x).abs() <= 1024
+                            && (m.pos.y - target_pos.y).abs() <= 1024
+                            && **id != EntityId(0)
+                    })
+                    .map(|(id, _)| (*id, 0i64))
+                    .collect();
+                candidates.sort_by_key(|(id, _)| *id);
+                let _ = &mut candidates;
+                // each chained target takes 70% of the previous damage
+                // (fixed integer arithmetic, deterministic)
+                let mut dmg: i64 = outcome.damage.max(1);
+                for (i, _) in candidates.iter().enumerate().take(max_targets as usize) {
+                    let _ = i;
+                    outcome.damage = outcome.damage.saturating_add(dmg);
+                    dmg = dmg * 70 / 100;
+                }
+            }
+        }
+    }
+
     /// Interest evaluation (SPEC.md section 140): for every client, every
     /// other player transitions in/out of scope; leaving scope emits
     /// `EntityOutOfScope` (never a despawn) and entering scope lets the

@@ -59,6 +59,9 @@ pub struct GameServer {
     /// Network metrics (SPEC.md section 190). POLICY domain: counters only,
     /// never gameplay. Optional so loopback tests can run without one.
     metrics: Option<Arc<Mutex<arpg_metrics::Metrics>>>,
+    /// Empty-grace lifecycle guard (SPEC.md section 149): observes the
+    /// player count and counts the grace down when the game is empty.
+    guard: Arc<Mutex<crate::policy::GameGuard>>,
 }
 
 impl GameServer {
@@ -72,15 +75,25 @@ impl GameServer {
         let endpoint =
             Endpoint::server(server_config, "127.0.0.1:0".parse().unwrap()).expect("bind loopback");
         let local_addr = endpoint.local_addr().expect("local addr");
+        let guard = Arc::new(Mutex::new(crate::policy::GameGuard::new(
+            crate::policy::ServerPolicy::default(),
+        )));
         Ok((
             GameServer {
                 endpoint,
                 local_addr,
                 game,
                 metrics: None,
+                guard,
             },
             cert_der,
         ))
+    }
+
+    /// Access the empty-grace guard (section 149): the host loop ticks it
+    /// and runs the save-then-destroy pipeline when it reports expiry.
+    pub fn guard(&self) -> &Arc<Mutex<crate::policy::GameGuard>> {
+        &self.guard
     }
 
     /// Attach a metrics collector for network byte counters (section 190).
@@ -196,6 +209,10 @@ impl GameServer {
             }
             let pos = arpg_core::WorldPos::new(0, 0);
             game.add_player(player, pos);
+            self.guard
+                .lock()
+                .unwrap()
+                .observe_players(game.state.players.len());
             session.player = player;
             session.handle_join_accepted(game.state.tick);
             (
@@ -282,5 +299,14 @@ impl GameServer {
         }
         datagram_task.abort();
         session.disconnect();
+        // sections 146-149: observe the player count after the session
+        // ends; the empty-grace guard starts counting down when the game
+        // becomes empty. The character save + GameState destroy pipeline
+        // runs at guard expiry (section 149), driven by the host loop.
+        let players_left = {
+            let game = self.game.lock().unwrap();
+            game.state.players.len().saturating_sub(1)
+        };
+        self.guard.lock().unwrap().observe_players(players_left);
     }
 }

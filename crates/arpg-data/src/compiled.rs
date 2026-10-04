@@ -36,16 +36,25 @@ pub struct CompiledSkill {
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct CompiledMonster {
     pub id: u32,
+
     pub name: String,
     pub base_life: i64,
     pub damage: i64,
     pub speed_fp: i32,
     pub aggro_range: i32,
     pub experience: u64,
+    #[serde(default)]
     pub ranged: bool,
+    #[serde(default)]
     pub act: u8,
+    #[serde(default)]
     pub damage_type: u8,
+    #[serde(default = "monster_default_leaves_corpse")]
     pub leaves_corpse: bool,
+}
+
+fn monster_default_leaves_corpse() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]

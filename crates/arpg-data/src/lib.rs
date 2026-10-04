@@ -2,6 +2,7 @@ use arpg_core::{ItemId, LevelDefId, MonsterDefId, SkillId};
 
 pub mod compiled;
 pub mod datapack;
+pub mod source;
 pub use datapack::{
     compile_reference_datapack, validate, ActDefinition, ClassDefinition, DataPackManifest,
     DifficultyDefinition, AFFIXES, CLASSES, DIFFICULTIES, RECIPES, RUNES, RUNEWORDS, SETS, UNIQUES,
