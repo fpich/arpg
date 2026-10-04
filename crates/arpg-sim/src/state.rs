@@ -165,6 +165,9 @@ pub struct GameInstance {
     pub trades: crate::trade::TradeSystem,
     /// Gold and merchants (SPEC.md section 94).
     pub economy: crate::economy::Economy,
+    /// Item sets (SPEC.md section 89): bonuses recomputed after each
+    /// equipment transaction.
+    pub sets: crate::set::SetSystem,
     /// Runtime metrics (SPEC.md section 190). POLICY domain: never part of
     /// the state hash, never alters gameplay. Optional so replays and
     /// tests can run without a collector.
@@ -231,6 +234,7 @@ impl GameInstance {
             dots: BTreeMap::new(),
             trades: crate::trade::TradeSystem::new(),
             economy: crate::economy::Economy::new(),
+            sets: crate::set::SetSystem::new(),
             metrics: None,
             traces: crate::trace::TraceBuffer::new(),
             states: crate::states::StateStore::new(),
@@ -1844,9 +1848,30 @@ impl GameInstance {
             return Err(e);
         }
         self.ground_spawn_ticks.remove(&item);
+        // Set bonuses are recomputed after equipment transactions
+        // (SPEC.md section 89).
+        if matches!(to, crate::item::ItemLocation::Equipment(_, _)) {
+            self.recompute_set_bonuses(player);
+        }
         let key = self.next_event_key(EntityId(player.0 as u64));
         self.event_buffer.emit(key, GameEvent::ItemPickedUp(item));
         Ok(())
+    }
+
+    /// Recompute the set bonuses of one player from their equipped
+    /// items (SPEC.md section 89).
+    pub fn recompute_set_bonuses(&mut self, player: PlayerId) -> i32 {
+        let mut equipped = std::collections::BTreeMap::new();
+        for (id, loc) in self.inventory.iter_locations() {
+            if let crate::item::ItemLocation::Equipment(p, slot) = loc {
+                if *p == player {
+                    if let Some(def) = self.inventory.get(id).map(|i| i.definition) {
+                        equipped.insert(*slot, def);
+                    }
+                }
+            }
+        }
+        self.sets.recompute(player, &equipped)
     }
 
     /// Mark an entity as PendingDeath (SPEC.md section 13) with kill credit.

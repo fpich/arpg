@@ -13,6 +13,7 @@ pub mod phase;
 pub mod quest;
 pub mod replication;
 pub mod scheduler;
+pub mod set;
 pub mod skill;
 pub mod social;
 pub mod socket;
