@@ -503,3 +503,61 @@ fn melee_swings_roll_to_hit_and_dexterity_helps() {
     );
     assert!(high > 0, "the high-dex attacker must land hits");
 }
+
+#[test]
+fn corpse_explosion_consumes_nearest_corpse() {
+    let mut inst = setup();
+    inst.register_skill(arpg_sim::skill::SkillDefinition {
+        id: SkillId(9),
+        targeting: TargetingSpec::Position,
+        cost: Default::default(),
+        timing: arpg_sim::skill::TimingFormula::Instant,
+        program: SkillProgram {
+            ops: vec![SkillOp::ConsumeCorpse(40)],
+        },
+    })
+    .unwrap();
+    inst.add_player(PlayerId(1), WorldPos::new(0, 0));
+    // a corpse near the target position
+    inst.corpses
+        .spawn(arpg_core::MonsterDefId(1), WorldPos::new(256, 0), None, 0);
+    let monster = inst.spawn_monster_with_tc(WorldPos::new(256, 0), None);
+    if let Some(m) = inst.monsters.get_mut(&monster) {
+        m.life = 1000;
+    }
+    let before = inst.monsters.get(&monster).unwrap().life;
+    inst.submit_command(skill_cmd(
+        PlayerId(1),
+        1,
+        SkillId(9),
+        Some(WorldPos::new(256, 0)),
+    ));
+    for _ in 0..12 {
+        inst.tick();
+    }
+    let after = inst.monsters.get(&monster).unwrap().life;
+    assert!(
+        before - after >= 40,
+        "corpse explosion must deal its damage"
+    );
+    assert!(
+        inst.corpses.iter().next().unwrap().consumed,
+        "the corpse is consumed"
+    );
+    // a second cast without a fresh corpse adds nothing
+    let before2 = inst.monsters.get(&monster).unwrap().life;
+    inst.submit_command(skill_cmd(
+        PlayerId(1),
+        2,
+        SkillId(9),
+        Some(WorldPos::new(256, 0)),
+    ));
+    for _ in 0..12 {
+        inst.tick();
+    }
+    let after2 = inst.monsters.get(&monster).unwrap().life;
+    assert_eq!(
+        before2, after2,
+        "a consumed corpse fuels no second explosion"
+    );
+}

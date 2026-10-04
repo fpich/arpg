@@ -43,6 +43,10 @@ pub enum SkillOp {
     Knockback(i32),
     ModifyStat(arpg_core::StatId, crate::stat::ModifierOp, i64),
     Teleport,
+    /// Corpse explosion (SPEC.md sections 36, 100): consumes the nearest
+    /// unconsumed corpse to the target and adds its damage to the
+    /// outcome; without a corpse the op contributes nothing.
+    ConsumeCorpse(i64),
     NoOp,
 }
 
@@ -124,9 +128,16 @@ pub fn execute_program(
     program: &SkillProgram,
     intent: &UseSkillIntent,
     mut spawn_missile: impl FnMut(u32),
+    mut consume_corpse: impl FnMut(i64) -> bool,
 ) -> SkillOutcome {
     let mut outcome = SkillOutcome::default();
-    execute_ops(&program.ops, intent, &mut outcome, &mut spawn_missile);
+    execute_ops(
+        &program.ops,
+        intent,
+        &mut outcome,
+        &mut spawn_missile,
+        &mut consume_corpse,
+    );
     outcome
 }
 
@@ -135,10 +146,13 @@ fn execute_ops(
     intent: &UseSkillIntent,
     outcome: &mut SkillOutcome,
     spawn_missile: &mut impl FnMut(u32),
+    consume_corpse: &mut impl FnMut(i64) -> bool,
 ) {
     for op in ops {
         match op {
-            SkillOp::Sequence(inner) => execute_ops(inner, intent, outcome, spawn_missile),
+            SkillOp::Sequence(inner) => {
+                execute_ops(inner, intent, outcome, spawn_missile, consume_corpse)
+            }
             SkillOp::DealDamage(packet) => {
                 outcome.damage = outcome.damage.saturating_add(sum_packet_mid(packet));
             }
@@ -154,6 +168,13 @@ fn execute_ops(
             SkillOp::ModifyStat(_, _, _) => {}
             SkillOp::Teleport => {
                 let _ = intent.target;
+            }
+            SkillOp::ConsumeCorpse(damage) => {
+                // the engine callback decides whether a corpse is
+                // available near the target position
+                if consume_corpse(*damage) {
+                    outcome.damage = outcome.damage.saturating_add(*damage);
+                }
             }
             SkillOp::NoOp => {}
         }

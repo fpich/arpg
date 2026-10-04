@@ -107,7 +107,7 @@ fn program_execution_sums_outcomes() {
         target: Some(WorldPos::new(256, 256)),
     };
     let mut missiles = Vec::new();
-    let outcome = execute_program(&def.program, &intent, |m| missiles.push(m));
+    let outcome = execute_program(&def.program, &intent, |m| missiles.push(m), |_| false);
     assert_eq!(outcome.damage, 15);
     assert_eq!(outcome.heal, 5);
     assert_eq!(outcome.mana_restored, 3);

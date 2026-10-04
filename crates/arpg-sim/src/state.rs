@@ -1677,7 +1677,28 @@ impl GameInstance {
             .map(|p| p.pos)
             .unwrap_or(WorldPos::ZERO);
         let mut spawned: Vec<u32> = Vec::new();
-        let outcome = crate::skill::execute_program(&def.program, &intent, |m| spawned.push(m));
+        // corpse consumption (SPEC.md sections 36, 100): the nearest
+        // unconsumed corpse to the target is consumed by ConsumeCorpse
+        // ops; one corpse serves at most one op per cast
+        let corpse_available = target_pos.and_then(|pos| self.corpses.nearest_unconsumed(pos));
+        let mut corpse_spent = false;
+        let outcome = crate::skill::execute_program(
+            &def.program,
+            &intent,
+            |m| spawned.push(m),
+            |_damage| match corpse_available {
+                Some(_) if !corpse_spent => {
+                    corpse_spent = true;
+                    true
+                }
+                _ => false,
+            },
+        );
+        if corpse_spent {
+            if let Some(id) = corpse_available {
+                self.corpses.consume(id);
+            }
+        }
         for def_id in spawned {
             self.spawn_missile(def_id, caster, caster_pos, target_pos);
         }
