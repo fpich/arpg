@@ -135,10 +135,8 @@ mod tests {
 
     #[test]
     fn cast_and_attack_are_independent_systems() {
-        let sys = systems();
-        // same raw bonus yields the same curved value here, but the
-        // systems remain separate parameters: distinct asymptotes are
-        // representable
+        // the systems remain separate parameters: distinct asymptotes
+        // are representable
         let mut custom = systems();
         custom.cast.asymptote_bp = 1000;
         assert_eq!(cast_ticks(10, 3000, &custom), {
@@ -164,7 +162,7 @@ mod tests {
         assert_eq!(hit_recovery_ticks(6, 0, &sys), 6);
         // huge bonus converges below the base but stays above the floor
         let fast = hit_recovery_ticks(6, 10_000_000, &sys);
-        assert!(fast < 6 && fast >= 1);
+        assert!((1..6).contains(&fast));
         // a tiny base reaches the floor
         assert_eq!(hit_recovery_ticks(2, 10_000_000, &sys), 1);
     }
