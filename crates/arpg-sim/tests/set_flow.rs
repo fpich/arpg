@@ -4,7 +4,7 @@
 use arpg_core::{ItemDefId, ItemId, PlayerId, WorldPos};
 use arpg_sim::item::EquipmentSlot;
 use arpg_sim::set::{PieceCondition, SetBonusTier, SetDefinition};
-use arpg_sim::{GameInstance, GridPos, ItemInstance, ItemLocation, ItemQuality};
+use arpg_sim::{GameInstance, ItemInstance, ItemLocation, ItemQuality};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
