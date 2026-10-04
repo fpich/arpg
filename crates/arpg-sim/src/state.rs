@@ -2737,7 +2737,10 @@ impl GameInstance {
             return;
         };
         let was_alive = p.life > 0;
-        p.life = p.life.saturating_sub(amount);
+        if !was_alive {
+            return;
+        }
+        p.life = (p.life - amount).max(0);
         let now_dead = p.life <= 0;
         if let Some(actor) = self.actors.get_mut(&target) {
             if now_dead && actor.lifecycle == arpg_core::Lifecycle::Alive {

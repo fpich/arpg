@@ -126,11 +126,13 @@ pub fn play() {
     }
     let game = Arc::new(Mutex::new(inst));
     let running = Arc::new(AtomicBool::new(true));
+    let last_lines: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
 
     // Background tick loop: 25 tps real time (SPEC.md section 25).
     {
         let game = Arc::clone(&game);
         let running = Arc::clone(&running);
+        let last_lines = Arc::clone(&last_lines);
         std::thread::spawn(move || {
             let tick_dur = Duration::from_millis(arpg_core::TICK_DURATION_MS as u64);
             loop {
@@ -142,7 +144,8 @@ pub fn play() {
                 let result = g.tick();
                 for e in &result.events {
                     if let Some(line) = describe_event(e) {
-                        println!("[event] {line}");
+                        let mut lg = last_lines.lock().unwrap();
+                        lg.push(line);
                     }
                 }
             }
@@ -169,6 +172,25 @@ pub fn play() {
         let mut parts = line.split_whitespace();
         let cmd = parts.next().unwrap_or("");
         let rest: Vec<&str> = parts.collect();
+        if show_events {
+            let drained: Vec<String> = std::mem::take(&mut *last_lines.lock().unwrap());
+            if !drained.is_empty() {
+                let mut counts: std::collections::BTreeMap<String, usize> =
+                    std::collections::BTreeMap::new();
+                for line in drained {
+                    *counts.entry(line).or_default() += 1;
+                }
+                for (line, n) in counts {
+                    if n == 1 {
+                        println!("[event] {line}");
+                    } else {
+                        println!("[event] {line} (x{n})");
+                    }
+                }
+            }
+        } else {
+            last_lines.lock().unwrap().clear();
+        }
         let mut g = game.lock().unwrap();
         match cmd {
             "help" => help(),
@@ -283,10 +305,21 @@ pub fn play() {
                 println!("potion queued");
             }
             "respawn" => {
+                let spawn = g
+                    .level
+                    .as_ref()
+                    .and_then(|l| {
+                        (1..l.collision.width as i32).find_map(|x| {
+                            (1..l.collision.height as i32)
+                                .find(|&y| l.collision.is_walkable(x, y))
+                                .map(|y| WorldPos::new(x * 256, y * 256))
+                        })
+                    })
+                    .unwrap_or(WorldPos::new(4 * 256, 4 * 256));
                 if let Some(p) = g.state.players.get_mut(&PLAYER) {
                     p.life = 100;
                     p.mana = 50;
-                    p.pos = WorldPos::ZERO;
+                    p.pos = spawn;
                 }
                 if let Some(actor) = g.actors.get_mut(&arpg_core::EntityId(PLAYER.0 as u64)) {
                     actor.lifecycle = arpg_core::Lifecycle::Alive;
