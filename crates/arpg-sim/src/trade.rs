@@ -464,6 +464,7 @@ mod tests {
             flags: 0,
             charges: None,
             hands: Default::default(),
+            requirements: Default::default(),
         };
         let item_id = item.id;
         inv.spawn_ground(
@@ -534,6 +535,7 @@ mod tests {
             flags: 0,
             charges: None,
             hands: Default::default(),
+            requirements: Default::default(),
         };
         let item_id = item.id;
         inv.spawn_ground(

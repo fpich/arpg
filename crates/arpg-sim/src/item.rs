@@ -35,6 +35,17 @@ pub struct ItemInstance {
     /// Hand occupancy (SPEC.md section 77): a two-handed weapon reserves
     /// both hand slots; only one-handed weapons may dual wield.
     pub hands: ItemHands,
+    /// Equip requirements (SPEC.md section 76).
+    pub requirements: ItemRequirements,
+}
+
+/// Equip requirements (SPEC.md section 76): level, strength, dexterity.
+/// None = no requirement on that axis.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ItemRequirements {
+    pub level: Option<i64>,
+    pub strength: Option<i64>,
+    pub dexterity: Option<i64>,
 }
 
 /// Weapon hand occupancy (SPEC.md section 77).

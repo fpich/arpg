@@ -154,6 +154,7 @@ fn inventory_move_is_transactional() {
         flags: 0,
         charges: None,
         hands: Default::default(),
+        requirements: Default::default(),
     };
     let level = LevelInstanceId(1);
     inv.spawn_ground(item, level, WorldPos::new(0, 0));
@@ -190,6 +191,7 @@ fn simultaneous_pickup_first_wins() {
         flags: 0,
         charges: None,
         hands: Default::default(),
+        requirements: Default::default(),
     };
     let level = LevelInstanceId(1);
     inv.spawn_ground(item, level, WorldPos::new(0, 0));
@@ -227,6 +229,7 @@ fn slot_conflicts_are_rejected() {
             flags: 0,
             charges: None,
             hands: Default::default(),
+            requirements: Default::default(),
         };
         inv.spawn_ground(item, LevelInstanceId(1), WorldPos::new(0, 0));
     }
@@ -262,6 +265,7 @@ fn stash_positions_are_distinct() {
             flags: 0,
             charges: None,
             hands: Default::default(),
+            requirements: Default::default(),
         };
         inv.spawn_ground(item, level, WorldPos::new(i as i32 * 256, 0));
         let ground = ItemLocation::Ground(level, WorldPos::new(i as i32 * 256, 0));
@@ -303,6 +307,7 @@ fn weapon_swap_exchanges_loadouts() {
         flags: 0,
         charges: None,
         hands: Default::default(),
+        requirements: Default::default(),
     };
     use arpg_sim::item::EquipmentSlot as Slot;
     let primary = mk(1, 2001);
@@ -379,6 +384,7 @@ fn two_handed_weapon_reserves_both_hand_slots() {
         flags: 0,
         charges: None,
         hands,
+        requirements: Default::default(),
     };
     let ground = || ItemLocation::Ground(LevelInstanceId(0), WorldPos::new(0, 0));
     inv.spawn_ground(
@@ -443,4 +449,53 @@ fn two_handed_weapon_reserves_both_hand_slots() {
         ItemLocation::Equipment(PlayerId(1), EquipmentSlot::OffHand),
     )
     .expect("one-handed off-hand is allowed");
+}
+
+#[test]
+fn equip_requirements_block_unqualified_players() {
+    let mut inst = arpg_sim::GameInstance::new(
+        std::sync::Arc::new(arpg_data::GameData::default()),
+        std::sync::Arc::new(arpg_rules::GameRules::default()),
+        [51u8; 32],
+    );
+    inst.add_player(PlayerId(1), WorldPos::new(0, 0));
+    let req = arpg_sim::item::ItemRequirements {
+        level: Some(10),
+        strength: Some(30),
+        dexterity: None,
+    };
+    let sword = ItemInstance {
+        id: ItemId(9),
+        definition: ItemDefId(5),
+        quality: ItemQuality::Normal,
+        item_level: 5,
+        generation_seed: [0; 32],
+        affixes: smallvec::SmallVec::new(),
+        sockets: smallvec::SmallVec::new(),
+        durability: None,
+        flags: 0,
+        charges: None,
+        hands: Default::default(),
+        requirements: req,
+    };
+    inst.inventory
+        .spawn_ground(sword, LevelInstanceId(0), WorldPos::new(0, 0));
+    let ground = ItemLocation::Ground(LevelInstanceId(0), WorldPos::new(0, 0));
+    let equip = ItemLocation::Equipment(PlayerId(1), EquipmentSlot::MainHand);
+    // level 1, base strength 0: blocked
+    assert_eq!(
+        inst.pick_up_item(PlayerId(1), ItemId(9), ground, equip),
+        Err(arpg_sim::ItemError::RequirementNotMet)
+    );
+    // raising the character's level and strength satisfies the check
+    inst.state.players.get_mut(&PlayerId(1)).unwrap().level = 12;
+    let entity = arpg_core::EntityId(1);
+    inst.actors
+        .get_mut(&entity)
+        .unwrap()
+        .stats
+        .set_base(arpg_sim::stat::STAT_STRENGTH, 35);
+    inst.pick_up_item(PlayerId(1), ItemId(9), ground, equip)
+        .expect("qualified player equips");
+    assert_eq!(inst.inventory.location(ItemId(9)), Some(equip));
 }

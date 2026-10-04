@@ -278,6 +278,7 @@ mod tests {
             flags: 1,
             charges: None,
             hands: Default::default(),
+            requirements: Default::default(),
         };
         sys.declare_sockets(ItemId(id), capacity);
         (item, sys)

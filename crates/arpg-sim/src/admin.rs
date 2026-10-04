@@ -113,6 +113,7 @@ impl GameInstance {
                     flags: 0,
                     charges: None,
                     hands: Default::default(),
+                    requirements: Default::default(),
                 };
                 let pos = self
                     .state

@@ -3,6 +3,7 @@ use crate::item::ItemLocation;
 use crate::phase::Phase;
 use crate::replication::ReplicationTracker;
 use crate::scheduler::{CommandQueue, ScheduledCommand, Scheduler, DEFAULT_INPUT_DELAY_TICKS};
+use crate::stat::{STAT_DEXTERITY, STAT_STRENGTH};
 use arpg_core::{EntityId, EventBuffer, EventOrderKey, GameEvent, PlayerId, Tick, WorldPos};
 use arpg_world::LevelInstance;
 use std::collections::BTreeMap;
@@ -1195,6 +1196,7 @@ impl GameInstance {
             flags: 0,
             charges: None,
             hands: Default::default(),
+            requirements: Default::default(),
         };
         let pos = self
             .state
@@ -2435,6 +2437,40 @@ impl GameInstance {
         ground: crate::item::ItemLocation,
         to: crate::item::ItemLocation,
     ) -> Result<(), crate::item::ItemError> {
+        // Equip requirements (SPEC.md section 76): equipping may demand
+        // character level, strength or dexterity; checked against the
+        // actor's current stat block (base + equipment bonuses).
+        if let crate::item::ItemLocation::Equipment(_, _) = to {
+            let req = self
+                .inventory
+                .get(item)
+                .map(|i| i.requirements)
+                .unwrap_or_default();
+            if !req.level.is_none() || !req.strength.is_none() || !req.dexterity.is_none() {
+                let entity = EntityId(player.0 as u64);
+                let (level, strength, dexterity) = self
+                    .actors
+                    .get(&entity)
+                    .map(|a| {
+                        (
+                            self.state
+                                .players
+                                .get(&player)
+                                .map(|p| p.level)
+                                .unwrap_or(0),
+                            a.stats.compute(STAT_STRENGTH),
+                            a.stats.compute(STAT_DEXTERITY),
+                        )
+                    })
+                    .unwrap_or((0, 0, 0));
+                let unmet = req.level.is_some_and(|l| level < l)
+                    || req.strength.is_some_and(|s| strength < s)
+                    || req.dexterity.is_some_and(|d| dexterity < d);
+                if unmet {
+                    return Err(crate::item::ItemError::RequirementNotMet);
+                }
+            }
+        }
         if let Err(e) = self.inventory.pick_up(player, item, ground, to) {
             // invariant visibility (SPEC.md sections 191, 190): a pickup
             // against a vanished or stale location is observable

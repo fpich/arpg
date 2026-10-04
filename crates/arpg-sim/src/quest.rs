@@ -612,6 +612,7 @@ pub fn mint_quest_item(
         flags: 0,
         charges: None,
         hands: Default::default(),
+        requirements: Default::default(),
     }
 }
 

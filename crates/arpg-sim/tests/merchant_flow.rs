@@ -121,6 +121,7 @@ fn sell_credits_gold_and_removes_item() {
         flags: 0,
         charges: None,
         hands: Default::default(),
+        requirements: Default::default(),
     };
     inst.inventory
         .spawn_ground(item, arpg_core::LevelInstanceId(0), WorldPos::new(0, 0));
@@ -169,6 +170,7 @@ fn repair_restores_durability_for_gold() {
         flags: 0,
         charges: None,
         hands: Default::default(),
+        requirements: Default::default(),
     };
     inst.inventory
         .spawn_ground(item, arpg_core::LevelInstanceId(0), WorldPos::new(0, 0));
@@ -285,6 +287,7 @@ fn recharge_restores_charges_for_gold() {
             max: 4,
         }),
         hands: Default::default(),
+        requirements: Default::default(),
     };
     inst.inventory
         .spawn_ground(charged, arpg_core::LevelInstanceId(0), WorldPos::new(0, 0));

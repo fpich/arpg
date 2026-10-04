@@ -30,6 +30,7 @@ fn equip_item(inst: &mut GameInstance, def: ItemDefId, slot: EquipmentSlot) {
         flags: 0,
         charges: None,
         hands: Default::default(),
+        requirements: Default::default(),
     };
     inst.inventory
         .spawn_ground(item, arpg_core::LevelInstanceId(0), WorldPos::new(0, 0));
@@ -124,6 +125,7 @@ fn equipped_affixes_fold_into_player_stats() {
         flags: 0,
         charges: None,
         hands: Default::default(),
+        requirements: Default::default(),
     };
     inst.inventory
         .spawn_ground(item, arpg_core::LevelInstanceId(0), WorldPos::new(0, 0));

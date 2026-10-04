@@ -60,6 +60,7 @@ impl LootRoller {
                     flags: 0,
                     charges: None,
                     hands: Default::default(),
+                    requirements: Default::default(),
                 });
                 self.next_item_id += 1;
                 break;
