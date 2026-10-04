@@ -499,3 +499,30 @@ fn equip_requirements_block_unqualified_players() {
         .expect("qualified player equips");
     assert_eq!(inst.inventory.location(ItemId(9)), Some(equip));
 }
+
+#[test]
+fn identification_changes_display_state_only() {
+    let mut item = ItemInstance {
+        id: ItemId(11),
+        definition: ItemDefId(3),
+        quality: ItemQuality::Magic,
+        item_level: 12,
+        generation_seed: [9; 32],
+        affixes: smallvec::smallvec![7, 8],
+        sockets: smallvec::SmallVec::new(),
+        durability: None,
+        flags: arpg_sim::item::FLAG_UNIDENTIFIED,
+        charges: None,
+        hands: Default::default(),
+        requirements: Default::default(),
+    };
+    assert!(!item.is_identified(), "starts unidentified");
+    let seed = item.generation_seed;
+    let affixes = item.affixes.clone();
+    item.identify();
+    assert!(item.is_identified(), "identified after the call");
+    // properties are untouched: they were generated server-side already
+    assert_eq!(item.generation_seed, seed);
+    assert_eq!(item.affixes, affixes);
+    assert_eq!(item.quality, ItemQuality::Magic);
+}

@@ -56,6 +56,24 @@ pub enum ItemHands {
     TwoHanded,
 }
 
+/// Item flags (SPEC.md section 75): bit 0 marks an unidentified item.
+/// The real properties are already generated server-side; identification
+/// only changes this persistent display state.
+pub const FLAG_UNIDENTIFIED: u32 = 1;
+
+impl ItemInstance {
+    /// Identified / Unidentified (SPEC.md section 75).
+    pub fn is_identified(&self) -> bool {
+        self.flags & FLAG_UNIDENTIFIED == 0
+    }
+
+    /// Identify the item: clears the unidentified flag. The underlying
+    /// properties never change - they were decided at generation time.
+    pub fn identify(&mut self) {
+        self.flags &= !FLAG_UNIDENTIFIED;
+    }
+}
+
 /// Charge pool carried by a charged item (SPEC.md section 79).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ChargeState {
