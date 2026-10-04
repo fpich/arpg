@@ -9,3 +9,6 @@ license.workspace = true
 arpg-core.workspace = true
 arpg-data.workspace = true
 arpg-rules.workspace = true
+arpg-sim.workspace = true
+arpg-replay.workspace = true
+arpg-metrics.workspace = true
