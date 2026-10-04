@@ -47,6 +47,9 @@ pub struct MonsterState {
     pub aggro_range: i32,
     pub experience: u64,
     pub ranged: bool,
+    /// Damage type index (0 physical, 1 magic, 2 fire, 3 cold, 4
+    /// lightning, 5 poison) used to resolve resistance (SPEC.md section 51).
+    pub damage_type: u8,
 }
 
 #[derive(Debug, Default)]
@@ -332,6 +335,7 @@ impl GameInstance {
             aggro_range: 6,
             experience: 20,
             ranged: false,
+            damage_type: 0,
         })
     }
 
@@ -343,7 +347,7 @@ impl GameInstance {
         home: WorldPos,
     ) -> EntityId {
         let def = self.data.monsters.get(&def_id).cloned();
-        let (life, damage, speed_fp, aggro_range, experience, ranged) = match def {
+        let (life, damage, speed_fp, aggro_range, experience, ranged, damage_type) = match def {
             Some(d) => (
                 d.base_life,
                 d.damage,
@@ -351,8 +355,9 @@ impl GameInstance {
                 d.aggro_range,
                 d.experience,
                 d.ranged,
+                d.damage_type,
             ),
-            None => (50, 10, 256, 6, 20, false),
+            None => (50, 10, 256, 6, 20, false, 0),
         };
         self.spawn_monster_internal(MonsterState {
             entity: EntityId(0),
@@ -364,6 +369,7 @@ impl GameInstance {
             aggro_range,
             experience,
             ranged,
+            damage_type,
         })
     }
 
@@ -720,7 +726,7 @@ impl GameInstance {
             }
             arpg_data::PotionEffect::Resistance {
                 kind,
-                percent: _,
+                percent,
                 ticks,
             } => {
                 // resistance modifier state with a duration (sections 54, 83)
@@ -739,6 +745,7 @@ impl GameInstance {
                     applied_tick: self.state.tick,
                     expires_tick: Some(Tick(self.state.tick.0 + ticks as u64)),
                     stack_key: (state_id, entity.0),
+                    magnitude_bp: (percent * 100) as i32,
                 };
                 self.states
                     .apply(entity, instance, crate::states::StackPolicy::Refresh);
@@ -788,6 +795,7 @@ impl GameInstance {
         let Some(m) = self.monsters.get(&monster) else {
             return;
         };
+        let resists = self.effective_resists(target);
         let Some(p) = self
             .state
             .players
@@ -812,6 +820,21 @@ impl GameInstance {
         let amount = m.damage;
         let tick = self.state.tick;
         let attack_index = self.traces.attack_index() + 1;
+        let (final_amount, resist_percent) = if hit {
+            let resolved = crate::damage::resolve_damage(
+                crate::damage::RollAmounts {
+                    physical: if m.damage_type == 0 { amount } else { 0 },
+                    magic: if m.damage_type == 1 { amount } else { 0 },
+                    fire: if m.damage_type == 2 { amount } else { 0 },
+                    cold: if m.damage_type == 3 { amount } else { 0 },
+                    lightning: if m.damage_type == 4 { amount } else { 0 },
+                },
+                &resists,
+            );
+            (resolved, self.resist_percent(&resists, m.damage_type))
+        } else {
+            (0, 0)
+        };
         self.traces.record_attack(crate::trace::AttackTrace {
             tick,
             attack_index,
@@ -823,12 +846,52 @@ impl GameInstance {
             roll_bp,
             hit,
             physical_raw: amount,
-            resistance_percent: 0,
-            final_damage: if hit { amount } else { 0 },
+            resistance_percent: resist_percent,
+            final_damage: final_amount,
         });
-        if hit {
-            self.apply_damage(target, monster, amount);
+        if hit && final_amount > 0 {
+            self.apply_damage(target, monster, final_amount);
         }
+    }
+
+    /// Effective per-type resistances of an entity (SPEC.md sections 51,
+    /// 54): base resistances plus active resistance states, capped at the
+    /// immunity threshold.
+    pub fn effective_resists(&self, entity: EntityId) -> crate::damage::Resistances {
+        let mut resists = crate::damage::Resistances::default();
+        for s in self.states.entity_states(entity) {
+            match s.state {
+                Self::STATE_RESIST_FIRE => {
+                    resists.fire_bp = (resists.fire_bp + s.magnitude_bp).min(10_000)
+                }
+                Self::STATE_RESIST_COLD => {
+                    resists.cold_bp = (resists.cold_bp + s.magnitude_bp).min(10_000)
+                }
+                Self::STATE_RESIST_LIGHTNING => {
+                    resists.lightning_bp = (resists.lightning_bp + s.magnitude_bp).min(10_000)
+                }
+                Self::STATE_RESIST_POISON => {
+                    resists.poison_bp = (resists.poison_bp + s.magnitude_bp).min(10_000)
+                }
+                Self::STATE_RESIST_MAGIC => {
+                    resists.magic_bp = (resists.magic_bp + s.magnitude_bp).min(10_000)
+                }
+                _ => {}
+            }
+        }
+        resists
+    }
+
+    fn resist_percent(&self, resists: &crate::damage::Resistances, damage_type: u8) -> i64 {
+        let bp = match damage_type {
+            0 => resists.physical_bp,
+            1 => resists.magic_bp,
+            2 => resists.fire_bp,
+            3 => resists.cold_bp,
+            4 => resists.lightning_bp,
+            _ => resists.poison_bp,
+        };
+        (bp as i64) / 100
     }
 
     /// Deterministic combat roll (SPEC.md section 47): BLAKE3(game seed ||

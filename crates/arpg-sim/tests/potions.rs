@@ -199,6 +199,7 @@ fn antidote_cures_poison_state() {
         applied_tick: inst.state.tick,
         expires_tick: Some(arpg_core::Tick(inst.state.tick.0 + 500)),
         stack_key: (GameInstance::STATE_POISONED, entity.0),
+        magnitude_bp: 0,
     };
     inst.states
         .apply(entity, instance, arpg_sim::StackPolicy::Refresh);
@@ -218,4 +219,83 @@ fn antidote_cures_poison_state() {
             .is_none(),
         "antidote must cure poison"
     );
+}
+
+#[test]
+fn resistance_potion_halves_elemental_damage() {
+    use arpg_sim::StateInstance;
+    let mut inst = game();
+    let entity = arpg_core::EntityId(1);
+    // Fire resistance state at 50% (section 54), as the elixir would apply
+    let instance = StateInstance {
+        state: GameInstance::STATE_RESIST_FIRE,
+        source: entity,
+        source_skill: None,
+        applied_tick: inst.state.tick,
+        expires_tick: Some(arpg_core::Tick(inst.state.tick.0 + 600)),
+        stack_key: (GameInstance::STATE_RESIST_FIRE, entity.0),
+        magnitude_bp: 5000,
+    };
+    inst.states
+        .apply(entity, instance, arpg_sim::StackPolicy::Refresh);
+    let resists = inst.effective_resists(entity);
+    assert_eq!(resists.fire_bp, 5000);
+    // A fire attack of 40 must resolve to 20
+    let roll = arpg_sim::RollAmounts {
+        physical: 0,
+        magic: 0,
+        fire: 40,
+        cold: 0,
+        lightning: 0,
+    };
+    assert_eq!(arpg_sim::damage::resolve_damage(roll, &resists), 20);
+}
+
+#[test]
+fn monster_fire_damage_reduced_by_resist_state() {
+    let mut inst = game();
+    let player = arpg_core::EntityId(1);
+    // find a fire-damage monster in the datapack (ranged => elemental)
+    let fire_id = inst
+        .data
+        .monsters
+        .iter()
+        .find(|(_, d)| d.damage_type == 2)
+        .map(|(id, _)| *id)
+        .expect("datapack has a fire monster");
+    let monster = inst.spawn_monster_def(fire_id, WorldPos::new(0, 1));
+    let m = inst.monsters.get(&monster).unwrap();
+    assert_eq!(m.damage_type, 2);
+    let raw = m.damage;
+    // Without resistance
+    inst.monster_attack(monster, player);
+    let trace = inst.traces.recent_attacks().last().unwrap();
+    assert_eq!(trace.resistance_percent, 0);
+    let baseline = trace.final_damage;
+    assert!(baseline > 0);
+    // Apply 50% fire resistance and attack again at a later tick
+    let instance = arpg_sim::StateInstance {
+        state: GameInstance::STATE_RESIST_FIRE,
+        source: player,
+        source_skill: None,
+        applied_tick: inst.state.tick,
+        expires_tick: Some(arpg_core::Tick(inst.state.tick.0 + 600)),
+        stack_key: (GameInstance::STATE_RESIST_FIRE, player.0),
+        magnitude_bp: 5000,
+    };
+    inst.states
+        .apply(player, instance, arpg_sim::StackPolicy::Refresh);
+    inst.state.tick = arpg_core::Tick(inst.state.tick.0 + 1);
+    inst.monster_attack(monster, player);
+    let trace = inst.traces.recent_attacks().last().unwrap();
+    assert_eq!(trace.resistance_percent, 50);
+    // Misses reduce final damage to 0; only compare when both hit
+    let attacks: Vec<_> = inst.traces.recent_attacks().collect();
+    if attacks[attacks.len() - 2].hit && trace.hit {
+        assert_eq!(
+            trace.final_damage,
+            attacks[attacks.len() - 2].final_damage / 2
+        );
+        assert_eq!(trace.physical_raw, raw);
+    }
 }

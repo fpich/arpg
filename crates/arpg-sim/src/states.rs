@@ -20,6 +20,9 @@ pub struct StateInstance {
     pub applied_tick: Tick,
     pub expires_tick: Option<Tick>,
     pub stack_key: (u32, u64),
+    /// Strength of the state in basis points (SPEC.md section 54):
+    /// resistance magnitude, slow percentage, etc. Zero for untyped states.
+    pub magnitude_bp: i32,
 }
 
 impl StateInstance {
@@ -119,6 +122,7 @@ impl StateStore {
             if let Some(e) = s.expires_tick {
                 buf.extend_from_slice(&e.0.to_le_bytes());
             }
+            buf.extend_from_slice(&s.magnitude_bp.to_le_bytes());
         }
         buf
     }

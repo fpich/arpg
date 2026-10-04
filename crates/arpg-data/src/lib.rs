@@ -62,6 +62,10 @@ pub struct MonsterDefinition {
     pub ranged: bool,
     /// Act index (0-4) this monster belongs to.
     pub act: u8,
+    /// Damage type: 0 physical, 1 magic, 2 fire, 3 cold, 4 lightning,
+    /// 5 poison (SPEC.md section 51). Ranged attackers deal elemental
+    /// damage so resistances matter in play.
+    pub damage_type: u8,
 }
 
 #[derive(Debug, Clone)]

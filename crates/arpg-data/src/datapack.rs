@@ -758,6 +758,9 @@ pub fn compile_reference_datapack() -> GameData {
     for (i, entry) in BESTIARY.iter().enumerate() {
         let (name, damage, speed_fp, aggro_range, experience, ranged, act) = *entry;
         let id = MonsterDefId(i as u32);
+        // Damage type: melee creatures deal physical (0); ranged species
+        // rotate through elemental types so resistances matter (section 51).
+        let damage_type = if ranged { 2 + (i as u8 % 4) } else { 0 };
         monsters.insert(
             id,
             MonsterDefinition {
@@ -770,6 +773,7 @@ pub fn compile_reference_datapack() -> GameData {
                 experience,
                 ranged,
                 act,
+                damage_type,
             },
         );
     }
@@ -788,6 +792,7 @@ pub fn compile_reference_datapack() -> GameData {
                 experience,
                 ranged: i % 2 == 1,
                 act: i as u8,
+                damage_type: i as u8 % 6,
             },
         );
     }

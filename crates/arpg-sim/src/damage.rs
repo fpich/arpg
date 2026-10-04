@@ -64,7 +64,7 @@ fn is_immune(resist_bp: i32) -> bool {
 
 /// Apply a resistance in basis points to an amount. Negative resistance
 /// amplifies damage. Result is clamped to >= 0.
-fn apply_resist(amount: i64, resist_bp: i32) -> i64 {
+pub fn apply_resist(amount: i64, resist_bp: i32) -> i64 {
     if is_immune(resist_bp) {
         return 0;
     }

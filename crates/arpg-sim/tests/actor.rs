@@ -177,6 +177,7 @@ fn state_store_policies() {
         applied_tick: Tick(1),
         expires_tick: Some(Tick(expires)),
         stack_key: (3, source.0),
+        magnitude_bp: 0,
     };
     // Refresh extends the existing instance
     store.apply(entity, mk(10), StackPolicy::Refresh);
