@@ -504,3 +504,24 @@ fn heavy_hit_staggers_target_with_hit_recovery() {
     );
     assert!(staggered, "a heavy hit must apply hit recovery");
 }
+
+#[test]
+fn healing_never_exceeds_max_life() {
+    let mut inst = game();
+    inst.apply_admin_command(&arpg_sim::admin::AdminCommand::SetStat {
+        player: PlayerId(1),
+        stat: arpg_sim::admin::AdminStat::Life,
+        value: 95,
+    })
+    .unwrap();
+    let potion = spawn_potion_in_belt(&mut inst, ItemDefId(1001));
+    submit_use_item(&mut inst, 1, potion);
+    for _ in 0..(arpg_sim::DEFAULT_INPUT_DELAY_TICKS + 2) {
+        inst.tick();
+    }
+    let life = inst.state.players.get(&PlayerId(1)).unwrap().life;
+    assert_eq!(
+        life, 100,
+        "SPEC.md section 182: HP cannot exceed the allowed max"
+    );
+}

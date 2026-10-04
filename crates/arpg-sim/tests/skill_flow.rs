@@ -691,3 +691,47 @@ fn native_chain_lightning_folds_deterministically() {
     // direct hit 100, then the native chain adds 100 + 70 + 49 on top
     assert_eq!(run(), 319, "chain jumps decay by 70% each");
 }
+
+#[test]
+fn knockback_blocked_by_wall_keeps_position() {
+    use arpg_sim::SecondaryProfile;
+    use arpg_world::LevelInstance;
+    let mut inst = setup();
+    inst.register_skill(fireball()).unwrap();
+    inst.add_player(PlayerId(1), WorldPos::new(0, 0));
+    inst.secondary_profiles.insert(
+        PlayerId(1),
+        SecondaryProfile {
+            knockback_bp: 10_000,
+            ..Default::default()
+        },
+    );
+    let mut collision = arpg_core::CollisionMap::new(8, 8);
+    for y in 0..8 {
+        collision.set_walkable(2, y, false);
+    }
+    collision.set_walkable(1, 0, true);
+    inst.level = Some(LevelInstance {
+        id: arpg_core::LevelInstanceId(1),
+        definition: arpg_core::LevelDefId(1),
+        collision,
+        rooms: Vec::new(),
+        objects: Vec::new(),
+    });
+    let monster = inst.spawn_monster(WorldPos::new(256, 0));
+    let pos_before = inst.monsters.get(&monster).unwrap().pos;
+    inst.submit_command(skill_cmd(
+        PlayerId(1),
+        1,
+        SkillId(1),
+        Some(WorldPos::new(256, 0)),
+    ));
+    for _ in 0..8 {
+        inst.tick();
+    }
+    let pos_after = inst.monsters.get(&monster).unwrap().pos;
+    assert_eq!(
+        pos_after, pos_before,
+        "SPEC.md section 23: a wall blocks the knockback push"
+    );
+}

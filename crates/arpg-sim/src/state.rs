@@ -1019,6 +1019,7 @@ impl GameInstance {
                     } else {
                         crate::damage::fixed_to_units(life_fp)
                     };
+                    Self::clamp_life(p);
                     p.mana += crate::damage::fixed_to_units(mana_fp);
                 }
             }
@@ -1354,6 +1355,7 @@ impl GameInstance {
                 } else {
                     crate::damage::fixed_to_units(per_tick_life)
                 };
+                Self::clamp_life(p);
                 p.mana += crate::damage::fixed_to_units(per_tick_mana);
                 if ticks <= 1 {
                     p.active_regen = None;
@@ -1593,6 +1595,17 @@ impl GameInstance {
             .entity_states(entity)
             .iter()
             .any(|s| s.state == Self::STATE_HEAL_BLOCKED)
+    }
+
+    /// Maximum life of a player character (SPEC.md section 182: HP
+    /// cannot exceed the allowed max). Base cap until the character
+    /// stat graph exposes a derived max-life stat; healing never
+    /// raises life above this value.
+    pub const MAX_PLAYER_LIFE: i64 = 100;
+
+    /// Clamp a player's life to the allowed max (SPEC.md section 182).
+    fn clamp_life(p: &mut crate::PlayerState) {
+        p.life = p.life.min(Self::MAX_PLAYER_LIFE);
     }
 
     /// Effective per-type resistances of an entity (SPEC.md sections 51,
@@ -2048,6 +2061,7 @@ impl GameInstance {
                 };
                 if let Some(p) = self.state.players.get_mut(&caster_player) {
                     p.life = p.life.saturating_add(gain);
+                    Self::clamp_life(p);
                 }
             }
             if secondary.mana_leech > 0 {
@@ -2059,14 +2073,25 @@ impl GameInstance {
             if secondary.thorns > 0 {
                 self.apply_damage(caster, target, secondary.thorns);
             }
-            // knockback pushes the target one tile away from the caster
+            // knockback pushes the target one tile away from the caster;
+            // the destination must stay walkable (sections 23, 50): a
+            // wall blocks the push and the target stays in place
             if secondary.knockback {
                 let origin = self.entity_pos(caster);
                 if let Some(m) = self.monsters.get_mut(&target) {
                     let dx = origin.map(|o| (m.pos.x - o.x).signum()).unwrap_or(0);
                     let dy = origin.map(|o| (m.pos.y - o.y).signum()).unwrap_or(0);
-                    m.pos.x += dx * 256;
-                    m.pos.y += dy * 256;
+                    let nx = m.pos.x + dx * 256;
+                    let ny = m.pos.y + dy * 256;
+                    let walkable = self
+                        .level
+                        .as_ref()
+                        .map(|l| l.collision.walkable_at(WorldPos::new(nx, ny)))
+                        .unwrap_or(true);
+                    if walkable {
+                        m.pos.x = nx;
+                        m.pos.y = ny;
+                    }
                 }
             }
             if outcome.heal != 0 {
@@ -2077,6 +2102,7 @@ impl GameInstance {
                 };
                 if let Some(p) = self.state.players.get_mut(&PlayerId(target.0 as u32)) {
                     p.life = p.life.saturating_add(heal);
+                    Self::clamp_life(p);
                 }
             }
             if outcome.mana_restored != 0 {

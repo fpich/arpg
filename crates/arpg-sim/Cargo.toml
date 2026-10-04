@@ -17,3 +17,10 @@ tracing.workspace = true
 smallvec.workspace = true
 thiserror.workspace = true
 arpg-persistence.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+
+[[bench]]
+name = "tick"
+harness = false
