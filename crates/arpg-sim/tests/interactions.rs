@@ -179,3 +179,51 @@ fn shrine_interaction_applies_blessing_state() {
     let level = inst.level.as_ref().unwrap();
     assert_eq!(level.objects[0].state, ObjectInstanceState::OnRecharge);
 }
+
+#[test]
+fn entity_leaving_interest_scope_is_not_despawned() {
+    let mut inst = arpg_sim::GameInstance::new(
+        std::sync::Arc::new(arpg_data::GameData::default()),
+        std::sync::Arc::new(arpg_rules::GameRules::default()),
+        [7u8; 32],
+    );
+    inst.add_player(arpg_core::PlayerId(1), WorldPos::new(0, 0));
+    inst.add_player(arpg_core::PlayerId(2), WorldPos::new(0, 0));
+    for _ in 0..3 {
+        inst.tick();
+    }
+    // player 2 walks far beyond the interest radius
+    inst.submit_command(arpg_sim::CommandEnvelope {
+        sequence: 1,
+        client_tick: arpg_core::Tick(1),
+        player: arpg_core::PlayerId(2),
+        command: arpg_sim::ClientCommand::Move(arpg_sim::MoveIntent {
+            direction: WorldPos::new(1_000_000, 0),
+            movement_mode: arpg_sim::command::MovementMode::Run,
+            sequence: 0,
+        }),
+    });
+    let mut saw_out_of_scope = false;
+    for _ in 0..12 {
+        let result = inst.tick();
+        saw_out_of_scope |= result.events.iter().any(|e| {
+            matches!(
+                e,
+                arpg_core::GameEvent::EntityOutOfScope {
+                    client: arpg_core::PlayerId(1),
+                    ..
+                }
+            )
+        });
+    }
+    assert!(
+        saw_out_of_scope,
+        "leaving scope must produce EntityOutOfScope"
+    );
+    // never a despawn: the player stays in the authoritative state
+    assert!(inst.state.players.contains_key(&arpg_core::PlayerId(2)));
+    let scope = inst
+        .interest
+        .scope_of(arpg_core::PlayerId(1), &inst.state.players, &inst.parties);
+    assert!(!scope.contains(&arpg_core::PlayerId(2)));
+}

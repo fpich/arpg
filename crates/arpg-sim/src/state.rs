@@ -152,6 +152,9 @@ pub struct GameInstance {
     pub replication: ReplicationTracker,
     /// Party management (SPEC.md section 109).
     pub parties: crate::social::PartySystem,
+    /// Interest sets per client (SPEC.md section 140): out-of-scope is an
+    /// `EntityOutOfScope`, never a despawn.
+    pub interest: crate::interest::InterestSet,
     /// Hostility declarations (SPEC.md sections 113-114).
     pub hostility: crate::social::HostilityMatrix,
     /// Summons and hirelings (SPEC.md sections 66-67).
@@ -234,6 +237,7 @@ impl GameInstance {
                 ..GameState::default()
             },
             actors: BTreeMap::new(),
+            interest: crate::interest::InterestSet::new(),
             skills: BTreeMap::new(),
             missiles: Vec::new(),
             next_missile_entity: 1 << 60,
@@ -624,6 +628,7 @@ impl GameInstance {
         hash_input.extend_from_slice(&self.state.expired_items.to_le_bytes());
         hash_input.extend_from_slice(&self.scheduler.canonical_hash_input());
         self.parties.hash_bytes(&mut hash_input);
+        self.interest.hash_bytes(&mut hash_input);
         self.hostility.hash_bytes(&mut hash_input);
         self.summons.hash_bytes(&mut hash_input);
         self.sockets.hash_bytes(&mut hash_input);
@@ -804,6 +809,9 @@ impl GameInstance {
             self.resolve_missile_collisions();
         }
 
+        if let Phase::ReplicationEventBuild = phase {
+            self.update_interest();
+        }
         if let Phase::WorldObjectUpdate = phase {
             if let Some(level) = self.level.as_mut() {
                 for obj in level.objects.iter_mut() {
@@ -2305,6 +2313,44 @@ impl GameInstance {
 
     /// Last accepted command sequence for a player: the ack that lets a
     /// retransmitting client stop (SPEC section 186).
+    /// Interest evaluation (SPEC.md section 140): for every client, every
+    /// other player transitions in/out of scope; leaving scope emits
+    /// `EntityOutOfScope` (never a despawn) and entering scope lets the
+    /// normal delta pipeline resume.
+    fn update_interest(&mut self) {
+        let players: Vec<(PlayerId, WorldPos)> = self
+            .state
+            .players
+            .iter()
+            .map(|(id, p)| (*id, p.pos))
+            .collect();
+        let mut transitions: Vec<(PlayerId, PlayerId, crate::interest::InterestEvent)> = Vec::new();
+        {
+            let parties = &self.parties;
+            let mut interest = std::mem::take(&mut self.interest);
+            for (client, client_pos) in &players {
+                for (entity, entity_pos) in &players {
+                    let event =
+                        interest.evaluate(*client, *entity, *client_pos, *entity_pos, parties);
+                    if event == crate::interest::InterestEvent::OutOfScope {
+                        transitions.push((*client, *entity, event));
+                    }
+                }
+            }
+            self.interest = interest;
+        }
+        for (client, entity, _) in transitions {
+            let key = self.next_event_key(EntityId(entity.0 as u64));
+            self.event_buffer.emit(
+                key,
+                GameEvent::EntityOutOfScope {
+                    client,
+                    entity: EntityId(entity.0 as u64),
+                },
+            );
+        }
+    }
+
     /// Build the client replication for one player and surface the resync
     /// invariant (SPEC.md sections 145, 191): a client whose base is more
     /// than one revision behind demands a full resync.

@@ -40,6 +40,13 @@ pub enum GameEvent {
     PlayerJoined(crate::id::PlayerId),
     PlayerDisconnected(crate::id::PlayerId),
     PlayerRemoved(crate::id::PlayerId),
+    /// Interest management (SPEC.md section 140): the entity left the
+    /// client's interest set — the client stops replicating it, the server
+    /// does NOT despawn it.
+    EntityOutOfScope {
+        client: crate::id::PlayerId,
+        entity: crate::id::EntityId,
+    },
 }
 
 pub struct SpawnMetadata {

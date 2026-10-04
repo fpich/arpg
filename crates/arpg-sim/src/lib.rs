@@ -6,6 +6,7 @@ pub mod command;
 pub mod corpse;
 pub mod damage;
 pub mod economy;
+pub mod interest;
 pub mod inventory;
 pub mod item;
 pub mod loot;
