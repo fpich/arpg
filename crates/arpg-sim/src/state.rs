@@ -155,6 +155,9 @@ pub struct GameInstance {
     pub summons: crate::summon::SummonSystem,
     /// Sockets, runes and runewords (SPEC.md sections 76, 193, 199).
     pub sockets: crate::socket::SocketSystem,
+    /// Auras (SPEC.md section 55): state producers refreshed on a
+    /// data-owned interval.
+    pub auras: crate::aura::AuraSystem,
     /// Runtime metrics (SPEC.md section 190). POLICY domain: never part of
     /// the state hash, never alters gameplay. Optional so replays and
     /// tests can run without a collector.
@@ -214,6 +217,7 @@ impl GameInstance {
             hostility: crate::social::HostilityMatrix::default(),
             summons: crate::summon::SummonSystem::new(),
             sockets: crate::socket::SocketSystem::new(),
+            auras: crate::aura::AuraSystem::new(),
             metrics: None,
             traces: crate::trace::TraceBuffer::new(),
             states: crate::states::StateStore::new(),
@@ -505,6 +509,7 @@ impl GameInstance {
         self.hostility.hash_bytes(&mut hash_input);
         self.summons.hash_bytes(&mut hash_input);
         self.sockets.hash_bytes(&mut hash_input);
+        self.auras.hash_bytes(&mut hash_input);
         hash_input.extend_from_slice(&self.states.canonical_hash_input());
         let state_hash = arpg_core::hash::state_hash(&hash_input);
         if let Some(metrics) = &self.metrics {
@@ -581,6 +586,9 @@ impl GameInstance {
             self.apply_potion_regen();
         }
 
+        if let Phase::EffectGeneration = phase {
+            self.apply_auras(tick);
+        }
         if let Phase::PeriodicStates = phase {
             self.states.expire(tick);
         }
@@ -768,6 +776,76 @@ impl GameInstance {
     }
 
     /// Apply one tick of active over-time potion regen (section 83).
+    /// Refresh auras (SPEC.md section 55): each due aura applies its state
+    /// to entities inside its radius per the target filter; aura states
+    /// stack under Refresh policy keyed by the aura owner as source.
+    fn apply_auras(&mut self, tick: Tick) {
+        if self.auras.active.is_empty() {
+            return;
+        }
+        let due: Vec<(EntityId, u32, crate::aura::AuraDefinition)> = self
+            .auras
+            .due(tick)
+            .into_iter()
+            .map(|(o, a, d)| (o, a.definition, d.clone()))
+            .collect();
+        for (owner, definition, def) in due {
+            let Some(owner_pos) = self.entity_pos(owner) else {
+                self.auras.deactivate(owner);
+                continue;
+            };
+            let targets: Vec<EntityId> = self
+                .state
+                .players
+                .values()
+                .map(|p| (EntityId(p.player.0 as u64), p.pos))
+                .filter(|(e, _)| {
+                    *e == owner
+                        || matches!(
+                            def.target_filter,
+                            crate::aura::TargetFilter::Party
+                                | crate::aura::TargetFilter::Allies
+                                | crate::aura::TargetFilter::Everyone
+                        )
+                })
+                .filter(|(_, pos)| crate::aura::within_radius(owner_pos, *pos, def.radius_fp))
+                .map(|(e, _)| e)
+                .collect();
+            let instance = crate::aura::AuraInstance {
+                definition,
+                owner,
+                last_refresh: tick,
+            };
+            self.auras.active.insert(owner, instance);
+            for target in targets {
+                let state_instance = crate::states::StateInstance {
+                    state: def.state,
+                    source: owner,
+                    source_skill: None,
+                    applied_tick: tick,
+                    expires_tick: Some(Tick(tick.0 + def.duration_ticks as u64)),
+                    stack_key: (def.state, owner.0),
+                    magnitude_bp: def.magnitude_bp,
+                };
+                self.states
+                    .apply(target, state_instance, crate::states::StackPolicy::Refresh);
+            }
+        }
+    }
+
+    /// Position of an entity (player or monster), canonical lookup.
+    fn entity_pos(&self, entity: EntityId) -> Option<WorldPos> {
+        if let Some(p) = self
+            .state
+            .players
+            .values()
+            .find(|p| EntityId(p.player.0 as u64) == entity)
+        {
+            return Some(p.pos);
+        }
+        self.monsters.get(&entity).map(|m| m.pos)
+    }
+
     fn apply_potion_regen(&mut self) {
         let players: Vec<PlayerId> = self.state.players.keys().copied().collect();
         for player in players {

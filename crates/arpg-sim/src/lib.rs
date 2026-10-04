@@ -1,6 +1,7 @@
 pub mod actor;
 pub mod admin;
 pub mod ai;
+pub mod aura;
 pub mod command;
 pub mod damage;
 pub mod economy;
