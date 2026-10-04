@@ -300,6 +300,8 @@ impl GameInstance {
     pub const STATE_POISONED: u32 = 6;
     pub const STATE_FROZEN: u32 = 7;
     pub const STATE_SLOWED: u32 = 8;
+    pub const STATE_BLEEDING: u32 = 9;
+    pub const STATE_HEAL_BLOCKED: u32 = 10;
 
     /// Arrival-side admission bound (SPEC.md sections 170-171): a flood of
     /// commands must never cause unbounded allocation. Overflow increments
@@ -789,8 +791,14 @@ impl GameInstance {
         };
         match effect {
             arpg_data::PotionEffect::Instant { life_fp, mana_fp } => {
+                let entity = EntityId(player.0 as u64);
+                let blocked = self.heal_blocked(entity);
                 if let Some(p) = self.state.players.get_mut(&player) {
-                    p.life += crate::damage::fixed_to_units(life_fp);
+                    p.life += if blocked {
+                        0
+                    } else {
+                        crate::damage::fixed_to_units(life_fp)
+                    };
                     p.mana += crate::damage::fixed_to_units(mana_fp);
                 }
             }
@@ -1095,8 +1103,13 @@ impl GameInstance {
             };
             let per_tick_life = life_fp / ticks as i64;
             let per_tick_mana = mana_fp / ticks as i64;
+            let blocked = self.heal_blocked(EntityId(player.0 as u64));
             if let Some(p) = self.state.players.get_mut(&player) {
-                p.life += crate::damage::fixed_to_units(per_tick_life);
+                p.life += if blocked {
+                    0
+                } else {
+                    crate::damage::fixed_to_units(per_tick_life)
+                };
                 p.mana += crate::damage::fixed_to_units(per_tick_mana);
                 if ticks <= 1 {
                     p.active_regen = None;
@@ -1242,6 +1255,15 @@ impl GameInstance {
                 self.dots.remove(&key);
             }
         }
+    }
+
+    /// Whether healing is currently blocked on the entity (SPEC.md
+    /// section 50): the prevent-healing state suppresses life recovery.
+    pub fn heal_blocked(&self, entity: EntityId) -> bool {
+        self.states
+            .entity_states(entity)
+            .iter()
+            .any(|s| s.state == Self::STATE_HEAL_BLOCKED)
     }
 
     /// Effective per-type resistances of an entity (SPEC.md sections 51,
@@ -1523,10 +1545,54 @@ impl GameInstance {
                     self.apply_damage(target, caster, total);
                 }
             }
+            if secondary.prevent_healing {
+                let instance = crate::states::StateInstance {
+                    state: Self::STATE_HEAL_BLOCKED,
+                    source: caster,
+                    source_skill: None,
+                    applied_tick: self.state.tick,
+                    expires_tick: Some(Tick(self.state.tick.0 + 60)),
+                    stack_key: (Self::STATE_HEAL_BLOCKED, caster.0),
+                    magnitude_bp: 10_000,
+                };
+                self.states
+                    .apply(target, instance, crate::states::StackPolicy::Refresh);
+            }
+            // open wounds: bleed over time (SPEC.md section 50), a
+            // damage-over-time packet paid over 10 ticks like poison
+            if secondary.open_wounds {
+                let bleed_fp = (outcome.damage.max(0)).saturating_mul(256) / 2;
+                let key = (target, caster.0);
+                match self.dots.get_mut(&key) {
+                    Some(dot) if dot.remaining_ticks > 0 => {
+                        dot.total_damage_fp = dot.total_damage_fp.saturating_add(bleed_fp);
+                    }
+                    _ => {
+                        self.dots
+                            .insert(key, crate::damage::DotAccumulator::new(bleed_fp, 10));
+                    }
+                }
+                let instance = crate::states::StateInstance {
+                    state: Self::STATE_BLEEDING,
+                    source: caster,
+                    source_skill: None,
+                    applied_tick: self.state.tick,
+                    expires_tick: Some(Tick(self.state.tick.0 + 10)),
+                    stack_key: (Self::STATE_BLEEDING, caster.0),
+                    magnitude_bp: 0,
+                };
+                self.states
+                    .apply(target, instance, crate::states::StackPolicy::Refresh);
+            }
             // leech returns to the caster
             if secondary.life_leech > 0 {
+                let gain = if self.heal_blocked(caster) {
+                    0
+                } else {
+                    secondary.life_leech
+                };
                 if let Some(p) = self.state.players.get_mut(&caster_player) {
-                    p.life = p.life.saturating_add(secondary.life_leech);
+                    p.life = p.life.saturating_add(gain);
                 }
             }
             if secondary.mana_leech > 0 {
@@ -1549,8 +1615,13 @@ impl GameInstance {
                 }
             }
             if outcome.heal != 0 {
+                let heal = if self.heal_blocked(target) {
+                    0
+                } else {
+                    outcome.heal
+                };
                 if let Some(p) = self.state.players.get_mut(&PlayerId(target.0 as u32)) {
-                    p.life = p.life.saturating_add(outcome.heal);
+                    p.life = p.life.saturating_add(heal);
                 }
             }
             if outcome.mana_restored != 0 {

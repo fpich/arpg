@@ -397,3 +397,44 @@ fn cold_monster_hit_freezes_and_slows_player() {
     let pos = inst.state.players.get(&PlayerId(1)).unwrap().pos;
     assert_eq!(pos, start, "frozen player does not move on odd ticks");
 }
+
+#[test]
+fn prevent_healing_blocks_potion_life_gain() {
+    let mut inst = game();
+    inst.apply_admin_command(&arpg_sim::admin::AdminCommand::SetStat {
+        player: PlayerId(1),
+        stat: arpg_sim::admin::AdminStat::Life,
+        value: 55,
+    })
+    .unwrap();
+    let before = inst.state.players.get(&PlayerId(1)).unwrap().life;
+    let entity = arpg_core::EntityId(1);
+    let instance = arpg_sim::StateInstance {
+        state: GameInstance::STATE_HEAL_BLOCKED,
+        source: entity,
+        source_skill: None,
+        applied_tick: inst.state.tick,
+        expires_tick: Some(arpg_core::Tick(inst.state.tick.0 + 60)),
+        stack_key: (GameInstance::STATE_HEAL_BLOCKED, entity.0),
+        magnitude_bp: 10_000,
+    };
+    inst.states
+        .apply(entity, instance, arpg_sim::StackPolicy::Refresh);
+    let potion = spawn_potion_in_belt(&mut inst, ItemDefId(1001));
+    submit_use_item(&mut inst, 1, potion);
+    for _ in 0..(arpg_sim::DEFAULT_INPUT_DELAY_TICKS + 2) {
+        inst.tick();
+    }
+    let after = inst.state.players.get(&PlayerId(1)).unwrap().life;
+    assert_eq!(after, before, "prevent-healing must block potion life gain");
+    // once the state expires the potion path works again
+    inst.states
+        .remove(entity, GameInstance::STATE_HEAL_BLOCKED, entity);
+    let potion = spawn_potion_in_belt(&mut inst, ItemDefId(1001));
+    submit_use_item(&mut inst, 2, potion);
+    for _ in 0..(arpg_sim::DEFAULT_INPUT_DELAY_TICKS + 2) {
+        inst.tick();
+    }
+    let restored = inst.state.players.get(&PlayerId(1)).unwrap().life;
+    assert!(restored > after, "healing resumes after the state expires");
+}

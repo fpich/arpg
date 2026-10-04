@@ -299,3 +299,61 @@ fn cast_speed_bonus_shrinks_cast_time() {
         "cast speed must accelerate the impact"
     );
 }
+
+#[test]
+fn open_wounds_bleeds_over_time() {
+    use arpg_sim::SecondaryProfile;
+    let mut inst = setup();
+    inst.register_skill(fireball()).unwrap();
+    inst.add_player(PlayerId(1), WorldPos::new(0, 0));
+    inst.secondary_profiles.insert(
+        PlayerId(1),
+        SecondaryProfile {
+            open_wounds_bp: 10_000,
+            ..Default::default()
+        },
+    );
+    let monster = inst.spawn_monster_with_tc(WorldPos::new(256, 0), None);
+    if let Some(m) = inst.monsters.get_mut(&monster) {
+        m.life = 500;
+    }
+    inst.submit_command(skill_cmd(
+        PlayerId(1),
+        1,
+        SkillId(1),
+        Some(WorldPos::new(256, 0)),
+    ));
+    let mut appeared = false;
+    for _ in 0..12 {
+        inst.tick();
+        if inst
+            .states
+            .entity_states(monster)
+            .iter()
+            .any(|s| s.state == GameInstance::STATE_BLEEDING)
+        {
+            appeared = true;
+            break;
+        }
+    }
+    assert!(appeared, "open wounds must apply the bleeding state");
+    let hit_life = inst.monsters.get(&monster).unwrap().life;
+    for _ in 0..10 {
+        inst.tick();
+    }
+    let final_life = inst.monsters.get(&monster).unwrap().life;
+    assert!(
+        final_life < hit_life,
+        "bleed must keep damaging after the hit: {} -> {}",
+        hit_life,
+        final_life
+    );
+    assert!(
+        !inst
+            .states
+            .entity_states(monster)
+            .iter()
+            .any(|s| s.state == GameInstance::STATE_BLEEDING),
+        "bleeding expires after the dot is paid"
+    );
+}
