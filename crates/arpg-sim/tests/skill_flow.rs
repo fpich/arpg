@@ -163,3 +163,108 @@ fn skill_flow_is_deterministic() {
 }
 
 use arpg_sim::GameInstance;
+
+#[test]
+fn secondary_effects_crit_and_leech_apply() {
+    use arpg_sim::SecondaryProfile;
+    let mut inst = setup();
+    inst.register_skill(fireball()).unwrap();
+    inst.add_player(PlayerId(1), WorldPos::new(0, 0));
+    inst.secondary_profiles.insert(
+        PlayerId(1),
+        SecondaryProfile {
+            critical_strike_bp: 10_000,
+            life_leech_bp: 1000,
+            ..Default::default()
+        },
+    );
+    inst.apply_admin_command(&arpg_sim::admin::AdminCommand::SetStat {
+        player: PlayerId(1),
+        stat: arpg_sim::admin::AdminStat::Life,
+        value: 50,
+    })
+    .unwrap();
+    let monster = inst.spawn_monster_with_tc(WorldPos::new(256, 0), None);
+    // give the monster enough life to survive the amplified hit
+    if let Some(m) = inst.monsters.get_mut(&monster) {
+        m.life = 500;
+    }
+    let m_life_before = inst.monsters.get(&monster).unwrap().life;
+    let p_life_before = inst.state.players.get(&PlayerId(1)).unwrap().life;
+    inst.submit_command(skill_cmd(
+        PlayerId(1),
+        1,
+        SkillId(1),
+        Some(WorldPos::new(256, 0)),
+    ));
+    for _ in 0..8 {
+        inst.tick();
+    }
+    let m_life_after = inst.monsters.get(&monster).unwrap().life;
+    let p_life_after = inst.state.players.get(&PlayerId(1)).unwrap().life;
+    // crit doubles the 30-fire fireball; leech returns 10% of the hit
+    assert!(
+        m_life_before - m_life_after >= 60,
+        "crit must amplify: {} -> {}",
+        m_life_before,
+        m_life_after
+    );
+    assert!(p_life_after > p_life_before, "life leech must heal");
+}
+
+#[test]
+fn secondary_thorns_reflect_to_attacker() {
+    use arpg_sim::SecondaryProfile;
+    let mut inst = setup();
+    inst.register_skill(fireball()).unwrap();
+    inst.add_player(PlayerId(1), WorldPos::new(0, 0));
+    inst.secondary_profiles.insert(
+        PlayerId(1),
+        SecondaryProfile {
+            thorns_bp: 2500,
+            ..Default::default()
+        },
+    );
+    let monster = inst.spawn_monster(WorldPos::new(256, 0));
+    let p_life_before = inst.state.players.get(&PlayerId(1)).unwrap().life;
+    inst.submit_command(skill_cmd(
+        PlayerId(1),
+        1,
+        SkillId(1),
+        Some(WorldPos::new(256, 0)),
+    ));
+    for _ in 0..8 {
+        inst.tick();
+    }
+    let p_life_after = inst.state.players.get(&PlayerId(1)).unwrap().life;
+    assert!(p_life_after < p_life_before, "thorns must reflect damage");
+    let _ = monster;
+}
+
+#[test]
+fn secondary_knockback_pushes_monster_away() {
+    use arpg_sim::SecondaryProfile;
+    let mut inst = setup();
+    inst.register_skill(fireball()).unwrap();
+    inst.add_player(PlayerId(1), WorldPos::new(0, 0));
+    inst.secondary_profiles.insert(
+        PlayerId(1),
+        SecondaryProfile {
+            knockback_bp: 10_000,
+            ..Default::default()
+        },
+    );
+    let monster = inst.spawn_monster(WorldPos::new(256, 0));
+    let pos_before = inst.monsters.get(&monster).unwrap().pos;
+    inst.submit_command(skill_cmd(
+        PlayerId(1),
+        1,
+        SkillId(1),
+        Some(WorldPos::new(256, 0)),
+    ));
+    for _ in 0..8 {
+        inst.tick();
+    }
+    let pos_after = inst.monsters.get(&monster).unwrap().pos;
+    assert!(pos_after.x > pos_before.x, "knockback must push away");
+}

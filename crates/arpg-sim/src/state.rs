@@ -168,6 +168,11 @@ pub struct GameInstance {
     /// Item sets (SPEC.md section 89): bonuses recomputed after each
     /// equipment transaction.
     pub sets: crate::set::SetSystem,
+    /// Secondary damage profiles per player (SPEC.md section 50):
+    /// crit, deadly strike, crushing blow, open wounds, knockback,
+    /// leech, thorns. Derived from gear in gameplay terms; stored per
+    /// player and hashed canonically.
+    pub secondary_profiles: BTreeMap<PlayerId, crate::secondary::SecondaryProfile>,
     /// Runtime metrics (SPEC.md section 190). POLICY domain: never part of
     /// the state hash, never alters gameplay. Optional so replays and
     /// tests can run without a collector.
@@ -235,6 +240,7 @@ impl GameInstance {
             trades: crate::trade::TradeSystem::new(),
             economy: crate::economy::Economy::new(),
             sets: crate::set::SetSystem::new(),
+            secondary_profiles: BTreeMap::new(),
             metrics: None,
             traces: crate::trace::TraceBuffer::new(),
             states: crate::states::StateStore::new(),
@@ -527,6 +533,18 @@ impl GameInstance {
         self.summons.hash_bytes(&mut hash_input);
         self.sockets.hash_bytes(&mut hash_input);
         self.auras.hash_bytes(&mut hash_input);
+        for (player, prof) in &self.secondary_profiles {
+            hash_input.extend_from_slice(&player.0.to_le_bytes());
+            hash_input.extend_from_slice(&prof.critical_strike_bp.to_le_bytes());
+            hash_input.extend_from_slice(&prof.deadly_strike_bp.to_le_bytes());
+            hash_input.extend_from_slice(&prof.crushing_blow_bp.to_le_bytes());
+            hash_input.extend_from_slice(&prof.open_wounds_bp.to_le_bytes());
+            hash_input.extend_from_slice(&prof.knockback_bp.to_le_bytes());
+            hash_input.extend_from_slice(&prof.life_leech_bp.to_le_bytes());
+            hash_input.extend_from_slice(&prof.mana_leech_bp.to_le_bytes());
+            hash_input.extend_from_slice(&prof.thorns_bp.to_le_bytes());
+            hash_input.extend_from_slice(&prof.prevent_healing_bp.to_le_bytes());
+        }
         for (key, dot) in &self.dots {
             hash_input.extend_from_slice(&key.0 .0.to_le_bytes());
             hash_input.extend_from_slice(&key.1.to_le_bytes());
@@ -1429,8 +1447,63 @@ impl GameInstance {
                 })
         });
         if let Some(target) = target {
+            // Secondary damage effects (SPEC.md section 50) apply on the
+            // attacker's profile; rolls come from the combat domain.
+            let caster_player = PlayerId(caster.0 as u32);
+            let profile = self
+                .secondary_profiles
+                .get(&caster_player)
+                .copied()
+                .unwrap_or_default();
+            let attack_index = self.traces.attack_index();
+            let roll = |tag: u8| -> u64 {
+                let mut hasher = blake3::Hasher::new();
+                hasher.update(&self.state.seed());
+                hasher.update(&caster.0.to_le_bytes());
+                hasher.update(&target.0.to_le_bytes());
+                hasher.update(&self.state.tick.0.to_le_bytes());
+                hasher.update(&attack_index.to_le_bytes());
+                hasher.update(&[tag]);
+                u64::from_le_bytes(hasher.finalize().as_bytes()[..8].try_into().unwrap())
+            };
+            let (life, max_life) = self
+                .monsters
+                .get(&target)
+                .map(|m| (m.life, m.life))
+                .unwrap_or((0, 0));
+            let secondary =
+                crate::secondary::resolve(&profile, roll, outcome.damage, life, max_life);
             if outcome.damage != 0 {
-                self.apply_damage(target, caster, outcome.damage);
+                let amplified = crate::secondary::amplify(outcome.damage, &secondary);
+                let total = amplified.saturating_add(secondary.crushing_amount);
+                if total > 0 {
+                    self.apply_damage(target, caster, total);
+                }
+            }
+            // leech returns to the caster
+            if secondary.life_leech > 0 {
+                if let Some(p) = self.state.players.get_mut(&caster_player) {
+                    p.life = p.life.saturating_add(secondary.life_leech);
+                }
+            }
+            if secondary.mana_leech > 0 {
+                if let Some(p) = self.state.players.get_mut(&caster_player) {
+                    p.mana = p.mana.saturating_add(secondary.mana_leech);
+                }
+            }
+            // thorns reflect back to the caster
+            if secondary.thorns > 0 {
+                self.apply_damage(caster, target, secondary.thorns);
+            }
+            // knockback pushes the target one tile away from the caster
+            if secondary.knockback {
+                let origin = self.entity_pos(caster);
+                if let Some(m) = self.monsters.get_mut(&target) {
+                    let dx = origin.map(|o| (m.pos.x - o.x).signum()).unwrap_or(0);
+                    let dy = origin.map(|o| (m.pos.y - o.y).signum()).unwrap_or(0);
+                    m.pos.x += dx * 256;
+                    m.pos.y += dy * 256;
+                }
             }
             if outcome.heal != 0 {
                 if let Some(p) = self.state.players.get_mut(&PlayerId(target.0 as u32)) {

@@ -13,6 +13,8 @@ pub mod phase;
 pub mod quest;
 pub mod replication;
 pub mod scheduler;
+pub mod secondary;
+pub use secondary::{SecondaryOutcome, SecondaryProfile};
 pub mod set;
 pub mod skill;
 pub mod social;
