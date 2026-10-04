@@ -6,7 +6,8 @@ pub mod level;
 pub use astar::a_star;
 pub use generation::RoomInstance;
 pub use generation::{
-    generate_level, GenerationError, LevelGraph, RoomRole, MAX_GENERATION_RETRIES,
+    generate_level, generate_level_counting, GenerationError, LevelGraph, RoomRole,
+    MAX_GENERATION_RETRIES,
 };
 pub use grid::{SpatialGrid, GRID_CELL_SIZE};
 pub use level::LevelInstance;

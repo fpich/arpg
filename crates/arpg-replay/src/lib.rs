@@ -348,11 +348,29 @@ impl<'a> Reader<'a> {
 /// every tick produces the recorded state hash (section 160).
 pub struct Replayer<'a> {
     pub game: &'a mut arpg_sim::GameInstance,
+    /// invariant visibility (SPEC.md sections 160, 191): number of ticks
+    /// whose replayed hash diverged from the recorded hash.
+    pub hash_mismatches: u64,
 }
 
 impl<'a> Replayer<'a> {
     pub fn new(game: &'a mut arpg_sim::GameInstance) -> Replayer<'a> {
-        Replayer { game }
+        Replayer {
+            game,
+            hash_mismatches: 0,
+        }
+    }
+
+    /// Replay one tick and check the produced hash against the recorded
+    /// one (section 160). A mismatch increments the state_hash_mismatch
+    /// invariant counter (section 191).
+    pub fn tick_against(&mut self, expected_hash: [u8; 32]) -> Result<[u8; 32], &'static str> {
+        let result = self.game.tick();
+        if result.state_hash != expected_hash {
+            self.hash_mismatches += 1;
+            return Err("state hash mismatch during replay");
+        }
+        Ok(result.state_hash)
     }
 
     /// Feed one recorded entry at the right point in the stream. Returns

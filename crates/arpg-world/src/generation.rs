@@ -80,6 +80,26 @@ pub fn generate_level(
     Err(GenerationError("world generation failed after retries"))
 }
 
+/// Same as `generate_level` but also reports how many sub-seed retries the
+/// generator needed (SPEC.md section 191: generation_retry visibility).
+pub fn generate_level_counting(
+    seed: [u8; 32],
+    level_id: u32,
+) -> Result<(CollisionMap, Vec<RoomInstance>, Vec<ObjectInstance>, u32), GenerationError> {
+    let graph = build_graph(&seed, level_id);
+    for retry in 0..MAX_GENERATION_RETRIES {
+        let sub_seed = derive_sub_seed(&seed, level_id, retry);
+        if let Some(result) = materialize(&graph, &sub_seed) {
+            let (map, rooms) = result;
+            if validate(&map, &rooms) {
+                let objects = place_objects(&rooms, &sub_seed);
+                return Ok((map, rooms, objects, retry));
+            }
+        }
+    }
+    Err(GenerationError("world generation failed after retries"))
+}
+
 /// Deterministic interactive object placement (SPEC.md section 98): one
 /// chest per mandatory room, one shrine in the quest room, one waypoint in
 /// the waypoint room, one barrel in the optional branch.

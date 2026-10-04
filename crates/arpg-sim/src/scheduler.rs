@@ -30,6 +30,14 @@ impl CommandQueue {
         self.queue.push(envelope);
     }
 
+    pub fn len(&self) -> usize {
+        self.queue.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.queue.is_empty()
+    }
+
     pub fn drain(&mut self) -> Vec<CommandEnvelope> {
         std::mem::take(&mut self.queue)
     }

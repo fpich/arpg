@@ -72,6 +72,18 @@ impl Revisions {
     }
 }
 
+/// Invariant and operational counters surfaced by persistence backends
+/// (SPEC.md sections 190-191): revision conflicts, save failures, save
+/// durations. Counters only; they never gate gameplay.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct PersistenceStats {
+    pub revision_conflicts: u64,
+    pub save_failures: u64,
+    pub save_count: u64,
+    /// duration of the last commit (section 190: character_save_seconds)
+    pub last_save_nanos: u64,
+}
+
 /// Persistence backend contract (SPEC.md section 117-119).
 ///
 /// A transaction validates atomically, then applies; on failure the caller
@@ -104,10 +116,14 @@ pub struct MemoryStore {
     items: BTreeMap<ItemId, Vec<u8>>,
     /// staged, uncommitted transactions
     staged: BTreeMap<TradeId, Vec<Mutation>>,
+    /// parties per open trade, for revision bumps at commit (section 118)
+    parties: BTreeMap<TradeId, Vec<PlayerId>>,
     /// last committed mutation journal, append-only
     journal: Vec<(TradeId, Mutation)>,
     /// inject failures at commit time when set
     fail_commit: bool,
+    /// invariant counters (sections 190-191)
+    pub stats: PersistenceStats,
 }
 
 impl MemoryStore {
@@ -145,10 +161,13 @@ impl PersistenceStore for MemoryStore {
     ) -> Result<TradeId, PersistenceError> {
         for (player, expected) in parties {
             if self.revisions.get(*player) != *expected {
+                self.stats.revision_conflicts += 1;
                 return Err(PersistenceError::RevisionMismatch(*player));
             }
         }
         self.staged.insert(trade, Vec::new());
+        self.parties
+            .insert(trade, parties.iter().map(|(p, _)| *p).collect());
         Ok(trade)
     }
 
@@ -164,6 +183,7 @@ impl PersistenceStore for MemoryStore {
     fn commit(&mut self, trade: TradeId) -> Result<(), PersistenceError> {
         if self.fail_commit {
             self.fail_commit = false;
+            self.stats.save_failures += 1;
             return Err(PersistenceError::Injected);
         }
         let mutations = self
@@ -188,11 +208,18 @@ impl PersistenceStore for MemoryStore {
             }
             self.journal.push((trade, mutation.clone()));
         }
+        if let Some(parties) = self.parties.remove(&trade) {
+            for player in parties {
+                self.revisions.bump(player);
+            }
+        }
+        self.stats.save_count += 1;
         Ok(())
     }
 
     fn rollback(&mut self, trade: TradeId) -> Result<(), PersistenceError> {
         self.staged.remove(&trade);
+        self.parties.remove(&trade);
         Ok(())
     }
 }

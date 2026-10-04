@@ -243,7 +243,20 @@ impl GameInstance {
 
     /// Raw arrival: the envelope is queued and admitted during the next tick
     /// phases (IngestCommands/CanonicalizeCommands/ValidateCommands).
+    /// Arrival-side admission bound (SPEC.md sections 170-171): a flood of
+    /// commands must never cause unbounded allocation. Overflow increments
+    /// the scheduler_overflow invariant counter (section 191).
+    pub const MAX_QUEUED_COMMANDS: usize = 1024;
+
     pub fn submit_command(&mut self, envelope: CommandEnvelope) {
+        if self.command_queue.len() >= Self::MAX_QUEUED_COMMANDS {
+            if let Some(m) = &self.metrics {
+                m.lock()
+                    .unwrap()
+                    .incr(arpg_metrics::names::SCHEDULER_OVERFLOW);
+            }
+            return;
+        }
         self.command_queue.push(envelope);
     }
 
@@ -1207,6 +1220,27 @@ impl GameInstance {
 
     /// Last accepted command sequence for a player: the ack that lets a
     /// retransmitting client stop (SPEC section 186).
+    /// Build the client replication for one player and surface the resync
+    /// invariant (SPEC.md sections 145, 191): a client whose base is more
+    /// than one revision behind demands a full resync.
+    pub fn replication_for(&mut self, client: PlayerId) -> crate::replication::ClientReplication {
+        let players = self.state.players.clone();
+        let repl = crate::replication::build_client_replication(
+            &mut self.replication,
+            client,
+            self.state.tick,
+            &players,
+        );
+        if !repl.resync_entities.is_empty() {
+            if let Some(m) = &self.metrics {
+                m.lock()
+                    .unwrap()
+                    .incr(arpg_metrics::names::RESYNC_REQUESTED);
+            }
+        }
+        repl
+    }
+
     pub fn scheduler_last_accepted(&self, player: PlayerId) -> Option<u32> {
         self.scheduler.last_accepted_sequence(player)
     }
@@ -1270,7 +1304,18 @@ impl GameInstance {
         ground: crate::item::ItemLocation,
         to: crate::item::ItemLocation,
     ) -> Result<(), crate::item::ItemError> {
-        self.inventory.pick_up(player, item, ground, to)?;
+        if let Err(e) = self.inventory.pick_up(player, item, ground, to) {
+            // invariant visibility (SPEC.md sections 191, 190): a pickup
+            // against a vanished or stale location is observable
+            if let Some(m) = &self.metrics {
+                let mut m = m.lock().unwrap();
+                m.incr(arpg_metrics::names::ITEM_TRANSACTION_FAILURES);
+                if matches!(e, crate::item::ItemError::ItemUnavailable) {
+                    m.incr(arpg_metrics::names::INVALID_ITEM_LOCATION);
+                }
+            }
+            return Err(e);
+        }
         self.ground_spawn_ticks.remove(&item);
         let key = self.next_event_key(EntityId(player.0 as u64));
         self.event_buffer.emit(key, GameEvent::ItemPickedUp(item));

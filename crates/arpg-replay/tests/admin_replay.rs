@@ -97,3 +97,16 @@ fn admin_replay_reproduces_identical_hashes() {
         assert_eq!(&playback.tick().state_hash, hash);
     }
 }
+
+#[test]
+fn replayer_counts_hash_mismatches() {
+    // section 191: a diverging tick is counted, not silent
+    let mut inst = game();
+    inst.add_player(arpg_core::PlayerId(1), arpg_core::WorldPos::new(0, 0));
+    let stale = [0u8; 32];
+    {
+        let mut replayer = Replayer::new(&mut inst);
+        assert!(replayer.tick_against(stale).is_err());
+        assert_eq!(replayer.hash_mismatches, 1);
+    }
+}

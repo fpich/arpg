@@ -146,6 +146,12 @@ pub mod names {
     pub const CHARACTER_SAVE_FAILURES: &str = "character_save_failures";
     pub const ITEM_GENERATED: &str = "item_generated";
     pub const ITEM_TRANSACTION_FAILURES: &str = "item_transaction_failures";
+    pub const INVALID_ITEM_LOCATION: &str = "invalid_item_location";
+    pub const STATE_HASH_MISMATCH: &str = "state_hash_mismatch";
+    pub const REVISION_CONFLICT: &str = "revision_conflict";
+    pub const SCHEDULER_OVERFLOW: &str = "scheduler_overflow";
+    pub const GENERATION_RETRY: &str = "generation_retry";
+    pub const RESYNC_REQUESTED: &str = "resync_requested";
 }
 
 #[cfg(test)]

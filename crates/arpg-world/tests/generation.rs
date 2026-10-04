@@ -44,3 +44,13 @@ fn retry_budget_is_bounded() {
     let err = GenerationError("world generation failed after retries");
     assert!(err.0.contains("failed"));
 }
+
+#[test]
+fn generation_retry_count_is_deterministic() {
+    // section 191: generation_retry is observable; same seed, same retries
+    let (_, _, _, r1) = arpg_world::generate_level_counting([5u8; 32], 1).unwrap();
+    let (_, _, _, r2) = arpg_world::generate_level_counting([5u8; 32], 1).unwrap();
+    assert_eq!(r1, r2);
+    let (_, _, _, r_other) = arpg_world::generate_level_counting([6u8; 32], 1).unwrap();
+    let _ = r_other;
+}

@@ -10,6 +10,8 @@ use rusqlite::Connection;
 
 pub struct SqliteStore {
     conn: Connection,
+    /// invariant counters (SPEC.md sections 190-191)
+    pub stats: crate::PersistenceStats,
 }
 
 const SCHEMA: &str = "
@@ -49,7 +51,10 @@ impl SqliteStore {
         let conn = Connection::open(path).map_err(|e| PersistenceError::Backend(e.to_string()))?;
         conn.execute_batch(SCHEMA)
             .map_err(|e| PersistenceError::Backend(e.to_string()))?;
-        Ok(SqliteStore { conn })
+        Ok(SqliteStore {
+            conn,
+            stats: crate::PersistenceStats::default(),
+        })
     }
 
     /// In-memory database, useful for tests.
@@ -58,7 +63,10 @@ impl SqliteStore {
             Connection::open_in_memory().map_err(|e| PersistenceError::Backend(e.to_string()))?;
         conn.execute_batch(SCHEMA)
             .map_err(|e| PersistenceError::Backend(e.to_string()))?;
-        Ok(SqliteStore { conn })
+        Ok(SqliteStore {
+            conn,
+            stats: crate::PersistenceStats::default(),
+        })
     }
 
     fn revision_of(&self, player: PlayerId) -> i64 {
@@ -121,67 +129,8 @@ fn encode_mutation(m: &Mutation) -> Vec<u8> {
     out
 }
 
-impl PersistenceStore for SqliteStore {
-    fn begin(
-        &mut self,
-        trade: TradeId,
-        parties: &[(PlayerId, CharacterRevision)],
-    ) -> Result<TradeId, PersistenceError> {
-        for (player, expected) in parties {
-            if self.revision_of(*player) as u64 != expected.0 {
-                return Err(PersistenceError::RevisionMismatch(*player));
-            }
-        }
-        self.conn
-            .execute(
-                "INSERT OR REPLACE INTO open_trade (trade_id, created) VALUES (?1, 0)",
-                [trade.0 as i64],
-            )
-            .map_err(|e| PersistenceError::Backend(e.to_string()))?;
-        for (player, _) in parties {
-            self.conn
-                .execute(
-                    "INSERT OR REPLACE INTO trade_party (trade_id, player_id) VALUES (?1, ?2)",
-                    rusqlite::params![trade.0 as i64, player.0 as i64],
-                )
-                .map_err(|e| PersistenceError::Backend(e.to_string()))?;
-        }
-        Ok(trade)
-    }
-
-    fn stage(&mut self, trade: TradeId, mutation: Mutation) -> Result<(), PersistenceError> {
-        let exists: bool = self
-            .conn
-            .query_row(
-                "SELECT 1 FROM open_trade WHERE trade_id = ?1",
-                [trade.0 as i64],
-                |_| Ok(true),
-            )
-            .unwrap_or(false);
-        if !exists {
-            return Err(PersistenceError::UnknownTransaction(trade.0));
-        }
-        let seq: i64 = self
-            .conn
-            .query_row(
-                "SELECT COALESCE(MAX(seq) + 1, 0) FROM staged_mutation WHERE trade_id = ?1",
-                [trade.0 as i64],
-                |row| row.get(0),
-            )
-            .map_err(|e| PersistenceError::Backend(e.to_string()))?;
-        self.conn
-            .execute(
-                "INSERT INTO staged_mutation (trade_id, seq, mutation) VALUES (?1, ?2, ?3)",
-                rusqlite::params![trade.0 as i64, seq, encode_mutation(&mutation)],
-            )
-            .map_err(|e| PersistenceError::Backend(e.to_string()))?;
-        Ok(())
-    }
-
-    /// Atomic commit: apply every staged mutation and bump the revisions of
-    /// the mutated characters in a single SQL transaction. On any error the
-    /// whole transaction rolls back and staged data survives.
-    fn commit(&mut self, trade: TradeId) -> Result<(), PersistenceError> {
+impl SqliteStore {
+    fn apply_commit(&mut self, trade: TradeId) -> Result<(), PersistenceError> {
         let tx = self
             .conn
             .transaction()
@@ -245,6 +194,79 @@ impl PersistenceStore for SqliteStore {
         tx.commit()
             .map_err(|e| PersistenceError::Backend(e.to_string()))?;
         Ok(())
+    }
+}
+
+impl PersistenceStore for SqliteStore {
+    fn begin(
+        &mut self,
+        trade: TradeId,
+        parties: &[(PlayerId, CharacterRevision)],
+    ) -> Result<TradeId, PersistenceError> {
+        for (player, expected) in parties {
+            if self.revision_of(*player) as u64 != expected.0 {
+                self.stats.revision_conflicts += 1;
+                return Err(PersistenceError::RevisionMismatch(*player));
+            }
+        }
+        self.conn
+            .execute(
+                "INSERT OR REPLACE INTO open_trade (trade_id, created) VALUES (?1, 0)",
+                [trade.0 as i64],
+            )
+            .map_err(|e| PersistenceError::Backend(e.to_string()))?;
+        for (player, _) in parties {
+            self.conn
+                .execute(
+                    "INSERT OR REPLACE INTO trade_party (trade_id, player_id) VALUES (?1, ?2)",
+                    rusqlite::params![trade.0 as i64, player.0 as i64],
+                )
+                .map_err(|e| PersistenceError::Backend(e.to_string()))?;
+        }
+        Ok(trade)
+    }
+
+    fn stage(&mut self, trade: TradeId, mutation: Mutation) -> Result<(), PersistenceError> {
+        let exists: bool = self
+            .conn
+            .query_row(
+                "SELECT 1 FROM open_trade WHERE trade_id = ?1",
+                [trade.0 as i64],
+                |_| Ok(true),
+            )
+            .unwrap_or(false);
+        if !exists {
+            return Err(PersistenceError::UnknownTransaction(trade.0));
+        }
+        let seq: i64 = self
+            .conn
+            .query_row(
+                "SELECT COALESCE(MAX(seq) + 1, 0) FROM staged_mutation WHERE trade_id = ?1",
+                [trade.0 as i64],
+                |row| row.get(0),
+            )
+            .map_err(|e| PersistenceError::Backend(e.to_string()))?;
+        self.conn
+            .execute(
+                "INSERT INTO staged_mutation (trade_id, seq, mutation) VALUES (?1, ?2, ?3)",
+                rusqlite::params![trade.0 as i64, seq, encode_mutation(&mutation)],
+            )
+            .map_err(|e| PersistenceError::Backend(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Atomic commit: apply every staged mutation and bump the revisions of
+    /// the mutated characters in a single SQL transaction. On any error the
+    /// whole transaction rolls back and staged data survives.
+    fn commit(&mut self, trade: TradeId) -> Result<(), PersistenceError> {
+        let started = std::time::Instant::now();
+        let result = self.apply_commit(trade);
+        self.stats.last_save_nanos = started.elapsed().as_nanos() as u64;
+        match &result {
+            Ok(()) => self.stats.save_count += 1,
+            Err(_) => self.stats.save_failures += 1,
+        }
+        result
     }
 
     fn rollback(&mut self, trade: TradeId) -> Result<(), PersistenceError> {
