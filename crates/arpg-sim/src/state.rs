@@ -322,6 +322,8 @@ impl GameInstance {
     pub const STATE_SLOWED: u32 = 8;
     pub const STATE_BLEEDING: u32 = 9;
     pub const STATE_HEAL_BLOCKED: u32 = 10;
+    /// Shrine blessing (SPEC.md section 99): temporary combat buff.
+    pub const STATE_SHRINE_BOOST: u32 = 11;
 
     /// Arrival-side admission bound (SPEC.md sections 170-171): a flood of
     /// commands must never cause unbounded allocation. Overflow increments
@@ -1805,7 +1807,13 @@ impl GameInstance {
                 });
             }
             if outcome.damage != 0 && landed {
-                let amplified = crate::secondary::amplify(outcome.damage, &secondary);
+                let mut amplified = crate::secondary::amplify(outcome.damage, &secondary);
+                // Shrine blessing (SPEC.md sections 54, 99): the active
+                // boost state amplifies damage by its magnitude.
+                if let Some(boost) = self.states.get(caster, Self::STATE_SHRINE_BOOST, caster) {
+                    amplified =
+                        amplified.saturating_mul(10_000 + boost.magnitude_bp as i64) / 10_000;
+                }
                 // Strength feeds physical damage through the stat graph
                 // (SPEC.md sections 42, 50).
                 let strength_bonus =
@@ -2485,6 +2493,10 @@ impl GameInstance {
             .iter()
             .map(|(p, o)| (*p, *o))
             .collect();
+        // shrine/well effects collected during the loop, applied after
+        // the level borrow ends (SPEC.md section 99)
+        let mut shrine_players: Vec<PlayerId> = Vec::new();
+        let mut well_players: Vec<PlayerId> = Vec::new();
         for (player_id, target_id) in intents {
             let Some(actor) = self.state.players.get(&player_id) else {
                 continue;
@@ -2505,7 +2517,12 @@ impl GameInstance {
                 | arpg_core::InteractableKind::Barrel
                 | arpg_core::InteractableKind::Urn => (St::Destroyed, 0),
                 arpg_core::InteractableKind::Door => (St::OnRecharge, 10),
-                arpg_core::InteractableKind::Shrine | arpg_core::InteractableKind::Well => {
+                arpg_core::InteractableKind::Shrine => {
+                    shrine_players.push(player_id);
+                    (St::OnRecharge, 250)
+                }
+                arpg_core::InteractableKind::Well => {
+                    well_players.push(player_id);
                     (St::OnRecharge, 250)
                 }
                 _ => (St::InUse, 0),
@@ -2520,6 +2537,29 @@ impl GameInstance {
                 key,
                 GameEvent::ItemPickedUp(arpg_core::ItemId(target_id.0 as u128)),
             );
+        }
+        // Shrine blessing (SPEC.md section 99): a temporary combat buff
+        // delivered as a normal StateInstance with its own duration.
+        for player_id in shrine_players {
+            let entity = EntityId(player_id.0 as u64);
+            let instance = crate::states::StateInstance {
+                state: Self::STATE_SHRINE_BOOST,
+                source: entity,
+                source_skill: None,
+                applied_tick: tick,
+                expires_tick: Some(Tick(tick.0 + 300)),
+                stack_key: (Self::STATE_SHRINE_BOOST, entity.0),
+                magnitude_bp: 5000,
+            };
+            self.states
+                .apply(entity, instance, crate::states::StackPolicy::Refresh);
+        }
+        // Well (SPEC.md section 99): full life and mana restore.
+        for player_id in well_players {
+            if let Some(p) = self.state.players.get_mut(&player_id) {
+                p.life = p.life.max(100);
+                p.mana = p.mana.max(50);
+            }
         }
     }
 

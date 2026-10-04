@@ -152,3 +152,30 @@ fn interactions_are_deterministic() {
     };
     assert_eq!(run(), run());
 }
+
+#[test]
+fn shrine_interaction_applies_blessing_state() {
+    let mut inst = setup();
+    inst.level = Some(LevelInstance {
+        id: arpg_core::LevelInstanceId(1),
+        definition: arpg_core::LevelDefId(1),
+        collision: arpg_core::CollisionMap::new(8, 8),
+        rooms: Vec::new(),
+        objects: vec![shrine_at(1, WorldPos::new(256, 0))],
+    });
+    inst.add_player(PlayerId(1), WorldPos::new(0, 0));
+    inst.submit_command(interact_cmd(PlayerId(1), 1, ObjectId(1)));
+    for _ in 0..5 {
+        inst.tick();
+    }
+    let entity = arpg_core::EntityId(1);
+    let states = inst.states.entity_states(entity);
+    let blessing = states
+        .iter()
+        .find(|s| s.state == GameInstance::STATE_SHRINE_BOOST);
+    assert!(blessing.is_some(), "the shrine must apply its blessing");
+    assert_eq!(blessing.unwrap().magnitude_bp, 5000);
+    // the shrine recharges before it can bless again
+    let level = inst.level.as_ref().unwrap();
+    assert_eq!(level.objects[0].state, ObjectInstanceState::OnRecharge);
+}
