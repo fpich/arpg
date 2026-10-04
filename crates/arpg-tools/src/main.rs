@@ -1,7 +1,4 @@
-//! Offline inspection tools for the ARPG engine: datapack manifest, bestiary
-//! dump, replay inspection, and a deterministic sim smoke run. These are
-//! operator/debug utilities (SPEC.md sections 169, 190-191); they never run a
-//! server and never expose anything on the network.
+mod play;
 
 use std::sync::Arc;
 
@@ -16,6 +13,7 @@ fn main() {
             args.get(2).map(|s| s.as_str()).unwrap_or("41"),
             args.get(3).and_then(|s| s.parse().ok()).unwrap_or(100u64),
         ),
+        "play" => play::play(),
         _ => help(),
     }
 }
@@ -27,6 +25,7 @@ fn help() {
     println!("  bestiary           all monster species with stats");
     println!("  replay <file>      decode a replay file: header + entries");
     println!("  sim [seed] [ticks] deterministic sim run; prints hashes/metrics");
+    println!("  play               interactive console session (in-process, no network)");
 }
 
 fn datapack() {
