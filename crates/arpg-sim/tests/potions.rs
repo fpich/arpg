@@ -159,3 +159,63 @@ fn potion_use_is_deterministic() {
     };
     assert_eq!(run(), run());
 }
+
+#[test]
+fn resistance_potion_applies_and_expires_state() {
+    let mut inst = game();
+    let elixir = spawn_potion_in_belt(&mut inst, ItemDefId(1010)); // Fire Resist 600 ticks
+    submit_use_item(&mut inst, 1, elixir);
+    for _ in 0..(arpg_sim::DEFAULT_INPUT_DELAY_TICKS + 2) {
+        inst.tick();
+    }
+    let entity = arpg_core::EntityId(1);
+    assert!(
+        inst.states
+            .get(entity, GameInstance::STATE_RESIST_FIRE, entity)
+            .is_some(),
+        "fire resistance state must be active"
+    );
+    // expiry: run past the duration
+    for _ in 0..700 {
+        inst.tick();
+    }
+    assert!(
+        inst.states
+            .get(entity, GameInstance::STATE_RESIST_FIRE, entity)
+            .is_none(),
+        "resistance state must expire"
+    );
+}
+
+#[test]
+fn antidote_cures_poison_state() {
+    let mut inst = game();
+    let entity = arpg_core::EntityId(1);
+    // apply a poison state first (section 54)
+    let instance = arpg_sim::StateInstance {
+        state: GameInstance::STATE_POISONED,
+        source: entity,
+        source_skill: None,
+        applied_tick: inst.state.tick,
+        expires_tick: Some(arpg_core::Tick(inst.state.tick.0 + 500)),
+        stack_key: (GameInstance::STATE_POISONED, entity.0),
+    };
+    inst.states
+        .apply(entity, instance, arpg_sim::StackPolicy::Refresh);
+    assert!(inst
+        .states
+        .get(entity, GameInstance::STATE_POISONED, entity)
+        .is_some());
+
+    let antidote = spawn_potion_in_belt(&mut inst, ItemDefId(1007));
+    submit_use_item(&mut inst, 1, antidote);
+    for _ in 0..(arpg_sim::DEFAULT_INPUT_DELAY_TICKS + 2) {
+        inst.tick();
+    }
+    assert!(
+        inst.states
+            .get(entity, GameInstance::STATE_POISONED, entity)
+            .is_none(),
+        "antidote must cure poison"
+    );
+}

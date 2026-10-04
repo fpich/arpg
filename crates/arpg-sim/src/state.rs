@@ -159,6 +159,9 @@ pub struct GameInstance {
     /// Combat and loot audit traces (SPEC.md sections 167-168). POLICY
     /// domain: never part of the state hash.
     pub traces: crate::trace::TraceBuffer,
+    /// Effect states per entity (SPEC.md section 54): buffs, cures,
+    /// resistance modifiers with durations.
+    pub states: crate::states::StateStore,
     /// XP pipeline configuration (SPEC.md section 110).
     pub xp_pipeline: crate::social::XpPipeline,
 }
@@ -210,6 +213,7 @@ impl GameInstance {
             sockets: crate::socket::SocketSystem::new(),
             metrics: None,
             traces: crate::trace::TraceBuffer::new(),
+            states: crate::states::StateStore::new(),
             xp_pipeline: crate::social::XpPipeline::D2_LIKE,
         }
     }
@@ -247,6 +251,17 @@ impl GameInstance {
 
     /// Raw arrival: the envelope is queued and admitted during the next tick
     /// phases (IngestCommands/CanonicalizeCommands/ValidateCommands).
+    /// Effect state ids (SPEC.md section 54): stable numeric ids so the
+    /// canonical hash stays datapack-independent.
+    pub const STATE_RESIST_FIRE: u32 = 1;
+    pub const STATE_RESIST_COLD: u32 = 2;
+    pub const STATE_RESIST_LIGHTNING: u32 = 3;
+    pub const STATE_RESIST_POISON: u32 = 4;
+    pub const STATE_RESIST_MAGIC: u32 = 5;
+    pub const STATE_POISONED: u32 = 6;
+    pub const STATE_FROZEN: u32 = 7;
+    pub const STATE_SLOWED: u32 = 8;
+
     /// Arrival-side admission bound (SPEC.md sections 170-171): a flood of
     /// commands must never cause unbounded allocation. Overflow increments
     /// the scheduler_overflow invariant counter (section 191).
@@ -484,6 +499,7 @@ impl GameInstance {
         self.hostility.hash_bytes(&mut hash_input);
         self.summons.hash_bytes(&mut hash_input);
         self.sockets.hash_bytes(&mut hash_input);
+        hash_input.extend_from_slice(&self.states.canonical_hash_input());
         let state_hash = arpg_core::hash::state_hash(&hash_input);
         if let Some(metrics) = &self.metrics {
             let mut m = metrics.lock().unwrap();
@@ -557,6 +573,10 @@ impl GameInstance {
 
         if let Phase::Regeneration = phase {
             self.apply_potion_regen();
+        }
+
+        if let Phase::PeriodicStates = phase {
+            self.states.expire(tick);
         }
 
         if let Phase::AiDecision = phase {
@@ -698,9 +718,40 @@ impl GameInstance {
                     p.active_regen = Some((life_fp, mana_fp, ticks.max(1)));
                 }
             }
-            arpg_data::PotionEffect::Resistance { .. } | arpg_data::PotionEffect::Cure { .. } => {
-                // resistance/cure states land with the states system (54);
-                // the potion is consumed with no immediate effect here
+            arpg_data::PotionEffect::Resistance {
+                kind,
+                percent: _,
+                ticks,
+            } => {
+                // resistance modifier state with a duration (sections 54, 83)
+                let state_id = match kind {
+                    arpg_data::ResistKind::Fire => Self::STATE_RESIST_FIRE,
+                    arpg_data::ResistKind::Cold => Self::STATE_RESIST_COLD,
+                    arpg_data::ResistKind::Lightning => Self::STATE_RESIST_LIGHTNING,
+                    arpg_data::ResistKind::Poison => Self::STATE_RESIST_POISON,
+                    arpg_data::ResistKind::Magic => Self::STATE_RESIST_MAGIC,
+                };
+                let entity = EntityId(player.0 as u64);
+                let instance = crate::states::StateInstance {
+                    state: state_id,
+                    source: entity,
+                    source_skill: None,
+                    applied_tick: self.state.tick,
+                    expires_tick: Some(Tick(self.state.tick.0 + ticks as u64)),
+                    stack_key: (state_id, entity.0),
+                };
+                self.states
+                    .apply(entity, instance, crate::states::StackPolicy::Refresh);
+            }
+            arpg_data::PotionEffect::Cure { kind } => {
+                // remove the matching detrimental state (sections 54, 83)
+                let entity = EntityId(player.0 as u64);
+                let cured = match kind {
+                    arpg_data::CureKind::Poison => Self::STATE_POISONED,
+                    arpg_data::CureKind::Cold => Self::STATE_FROZEN,
+                    arpg_data::CureKind::Stamina => Self::STATE_SLOWED,
+                };
+                self.states.remove(entity, cured, entity);
             }
         }
         self.inventory.remove(item);
