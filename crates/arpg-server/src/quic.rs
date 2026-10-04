@@ -438,6 +438,10 @@ impl GameServer {
                 // game full: reject
                 return;
             }
+            if game.skills.is_empty() {
+                game.register_datapack_skills()
+                    .expect("reference datapack skills must validate");
+            }
             if !game.state.players.contains_key(&player) {
                 let pos = arpg_core::WorldPos::new(0, 0);
                 game.add_player(player, pos);
