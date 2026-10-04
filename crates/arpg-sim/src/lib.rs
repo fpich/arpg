@@ -9,6 +9,7 @@ pub mod inventory;
 pub mod item;
 pub mod loot;
 pub mod missile;
+pub mod pack;
 pub mod phase;
 pub mod quest;
 pub mod replication;

@@ -36,4 +36,9 @@ pub trait AiBrain: Send {
     /// Perception -> ... -> intent generation. Returns the commands to
     /// apply this tick, in canonical entity order.
     fn think(&mut self, tick: Tick, view: &AiWorldView) -> Vec<(EntityId, AiCommand)>;
+
+    /// Aggro alert (SPEC.md section 64): the engine reports that an
+    /// entity was attacked; linked pack members should turn on the
+    /// attacker even outside perception range.
+    fn aggro_alert(&mut self, _entity: EntityId, _attacker: EntityId) {}
 }

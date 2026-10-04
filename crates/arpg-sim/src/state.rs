@@ -183,6 +183,9 @@ pub struct GameInstance {
     /// Defense profiles per player (SPEC.md sections 47, 56): block
     /// chance and hit-recovery bonuses consumed by the defense rolls.
     pub defense_profiles: BTreeMap<PlayerId, crate::secondary::DefenseProfile>,
+    /// Monster packs (SPEC.md section 64): engine-side registry with
+    /// aggro linkage consumed by the damage path.
+    pub packs: crate::pack::PackSystem,
     /// Derived-stat graph (SPEC.md section 42): strength and dexterity
     /// feed physical damage, attack rating and defense. Read-only at
     /// runtime; validated at load.
@@ -259,6 +262,7 @@ impl GameInstance {
             attack_speed_bonus_bp: BTreeMap::new(),
             defense_profiles: BTreeMap::new(),
             stat_graph: crate::stat::default_stat_graph(),
+            packs: crate::pack::PackSystem::new(),
             metrics: None,
             traces: crate::trace::TraceBuffer::new(),
             states: crate::states::StateStore::new(),
@@ -420,6 +424,61 @@ impl GameInstance {
         })
     }
 
+    /// Spawn a monster from its definition with champion scaling
+    /// (SPEC.md section 65): factors are percent (100 = base); the
+    /// resist bonus lands as a resistance state fixed at spawn.
+    pub fn spawn_monster_def_scaled(
+        &mut self,
+        def_id: arpg_core::MonsterDefId,
+        home: WorldPos,
+        life_pct: i64,
+        damage_pct: i64,
+        speed_pct: i64,
+        resist_bp: i32,
+    ) -> EntityId {
+        let entity = self.spawn_monster_def(def_id, home);
+        if let Some(m) = self.monsters.get_mut(&entity) {
+            m.life = m.life.saturating_mul(life_pct.max(0)) / 100;
+            m.damage = m.damage.saturating_mul(damage_pct.max(0)) / 100;
+            m.speed_fp = (m.speed_fp as i64).saturating_mul(speed_pct.max(0)) as i32 / 100;
+        }
+        if resist_bp > 0 {
+            let instance = crate::states::StateInstance {
+                state: Self::STATE_RESIST_MAGIC,
+                source: entity,
+                source_skill: None,
+                applied_tick: self.state.tick,
+                expires_tick: None,
+                stack_key: (Self::STATE_RESIST_MAGIC, entity.0),
+                magnitude_bp: resist_bp,
+            };
+            self.states
+                .apply(entity, instance, crate::states::StackPolicy::Refresh);
+        }
+        entity
+    }
+
+    /// Spawn a monster pack from one definition (SPEC.md section 64):
+    /// the leader spawns at `home`, members in a ring around it, all
+    /// registered with aggro linkage.
+    pub fn spawn_pack(
+        &mut self,
+        def_id: arpg_core::MonsterDefId,
+        home: WorldPos,
+        member_count: usize,
+    ) -> crate::pack::PackId {
+        let leader = self.spawn_monster_def(def_id, home);
+        let mut members = Vec::with_capacity(member_count);
+        for i in 0..member_count {
+            let angle = (i % 8) as i32;
+            let dx = (angle * 256) / 4 - 256;
+            let dy = (((angle + 2) % 8) * 256) / 4 - 256;
+            let pos = WorldPos::new(home.x + dx, home.y + dy);
+            members.push(self.spawn_monster_def(def_id, pos));
+        }
+        self.packs.register(leader, &members, true)
+    }
+
     fn spawn_monster_internal(&mut self, mut template: MonsterState) -> EntityId {
         self.next_monster_entity += 1;
         let entity = EntityId(self.next_monster_entity);
@@ -553,6 +612,7 @@ impl GameInstance {
         self.summons.hash_bytes(&mut hash_input);
         self.sockets.hash_bytes(&mut hash_input);
         self.auras.hash_bytes(&mut hash_input);
+        self.packs.hash_bytes(&mut hash_input);
         for (player, bonus) in &self.cast_speed_bonus_bp {
             hash_input.extend_from_slice(&player.0.to_le_bytes());
             hash_input.extend_from_slice(&bonus.to_le_bytes());
@@ -1958,6 +2018,7 @@ impl GameInstance {
                 }
             }
             self.monsters.remove(&id);
+            self.packs.remove_member(id);
             let key = self.next_event_key(id);
             self.event_buffer.emit(key, GameEvent::EntityRemoved(id));
         }
@@ -1988,6 +2049,15 @@ impl GameInstance {
                 amount,
             },
         );
+        // Pack aggro linkage (SPEC.md section 64): damaging one member
+        // alerts every linked member to the attacker.
+        if let Some(brain) = self.ai_brain.as_mut() {
+            for member in self.packs.linked_members(target) {
+                if member != target {
+                    brain.aggro_alert(member, source);
+                }
+            }
+        }
         if was_alive && now_dead {
             let key = self.next_event_key(source);
             self.event_buffer.emit(

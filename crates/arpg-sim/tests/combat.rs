@@ -176,3 +176,57 @@ fn missile_hits_at_radius() {
     assert!(missile.hits_at(WorldPos::new(100, 0), 128));
     assert!(!missile.hits_at(WorldPos::new(200, 0), 128));
 }
+
+#[test]
+fn packs_register_link_and_cleanup() {
+    let mut inst = arpg_sim::GameInstance::new(
+        std::sync::Arc::new(arpg_data::GameData::default()),
+        std::sync::Arc::new(arpg_rules::GameRules::default()),
+        [42u8; 32],
+    );
+    let pack_id = inst.spawn_pack(arpg_core::MonsterDefId(1), WorldPos::new(0, 0), 3);
+    let pack = inst.packs.packs().find(|p| p.id == pack_id).unwrap();
+    assert_eq!(pack.members.len(), 4, "leader plus three members");
+    assert!(pack.aggro_linked);
+    let linked = inst.packs.linked_members(pack.leader);
+    assert_eq!(linked.len(), 4, "every pack member is linked");
+    // killing a member removes it from the pack
+    let victim = *pack.members.iter().find(|m| **m != pack.leader).unwrap();
+    inst.apply_damage(victim, arpg_core::EntityId(999), i64::MAX / 2 + 1000);
+    inst.tick();
+    let pack = inst.packs.packs().find(|p| p.id == pack_id).unwrap();
+    assert!(
+        !pack.members.contains(&victim),
+        "dead members leave the pack"
+    );
+}
+
+#[test]
+fn champion_scaling_changes_monster_stats() {
+    let mut inst = arpg_sim::GameInstance::new(
+        std::sync::Arc::new(arpg_data::GameData::default()),
+        std::sync::Arc::new(arpg_rules::GameRules::default()),
+        [42u8; 32],
+    );
+    let base = inst.spawn_monster_def(arpg_core::MonsterDefId(1), WorldPos::new(0, 0));
+    let champion = inst.spawn_monster_def_scaled(
+        arpg_core::MonsterDefId(1),
+        WorldPos::new(512, 0),
+        250,
+        150,
+        150,
+        4000,
+    );
+    let base_m = inst.monsters.get(&base).unwrap();
+    let champ_m = inst.monsters.get(&champion).unwrap();
+    assert!(champ_m.life > base_m.life, "ExtraHealthy scales life");
+    assert!(champ_m.damage > base_m.damage, "ExtraStrong scales damage");
+    assert!(champ_m.speed_fp > base_m.speed_fp, "ExtraFast scales speed");
+    assert!(
+        inst.states
+            .entity_states(champion)
+            .iter()
+            .any(|s| s.magnitude_bp == 4000),
+        "Resistant lands a resist state"
+    );
+}

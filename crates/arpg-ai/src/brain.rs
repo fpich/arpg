@@ -29,6 +29,13 @@ impl AiBrain for HfsmBrain {
         self.agents.insert(entity, AiAgent::new(entity, home));
     }
 
+    fn aggro_alert(&mut self, entity: EntityId, attacker: EntityId) {
+        if let Some(agent) = self.agents.get_mut(&entity) {
+            agent.state = crate::AiState::Chase;
+            agent.blackboard.current_target = Some(attacker);
+        }
+    }
+
     fn think(&mut self, tick: Tick, view: &AiWorldView) -> Vec<(EntityId, AiCommand)> {
         let mut commands = Vec::new();
         for (entity, agent) in self.agents.iter_mut() {
