@@ -526,3 +526,45 @@ fn identification_changes_display_state_only() {
     assert_eq!(item.affixes, affixes);
     assert_eq!(item.quality, ItemQuality::Magic);
 }
+
+#[test]
+fn rune_removal_follows_recipe_policy() {
+    use arpg_sim::socket::{SocketRemovalPolicy, SocketSystem};
+    let mut sys = SocketSystem::new();
+    sys.declare_sockets(ItemId(21), 2);
+    let rws = arpg_sim::socket::reference_runewords();
+    let mut item = ItemInstance {
+        id: ItemId(21),
+        definition: ItemDefId(3),
+        quality: ItemQuality::Normal,
+        item_level: 1,
+        generation_seed: [0; 32],
+        affixes: smallvec::SmallVec::new(),
+        sockets: smallvec::SmallVec::new(),
+        durability: None,
+        flags: 0,
+        charges: None,
+        hands: Default::default(),
+        requirements: Default::default(),
+    };
+    let _ = &mut item;
+    sys.insert_rune(ItemId(21), arpg_sim::socket::RuneId(1), &rws)
+        .unwrap();
+    // Impossible policy: removal is refused by the caller honoring it
+    assert!(!SocketSystem::removal_allowed(
+        SocketRemovalPolicy::Impossible
+    ));
+    // Recoverable: the rune comes back
+    let out = sys
+        .remove_rune(ItemId(21), 0, SocketRemovalPolicy::Recoverable)
+        .unwrap();
+    assert_eq!(out, Some(arpg_sim::socket::RuneId(1)));
+    sys.insert_rune(ItemId(21), arpg_sim::socket::RuneId(1), &rws)
+        .unwrap();
+    // Destructive: the rune is destroyed
+    let out = sys
+        .remove_rune(ItemId(21), 0, SocketRemovalPolicy::Destructive)
+        .unwrap();
+    assert_eq!(out, None, "destructive removal destroys the rune");
+    assert_eq!(sys.filled(ItemId(21))[0], None, "socket is free again");
+}

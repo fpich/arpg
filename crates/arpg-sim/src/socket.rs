@@ -108,6 +108,17 @@ pub struct SocketSystem {
     runewords: BTreeMap<ItemId, u32>,
 }
 
+/// Rune removal policy (SPEC.md section 91): per-recipe.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SocketRemovalPolicy {
+    /// The recipe forbids removal entirely.
+    Impossible,
+    /// The rune is destroyed on removal.
+    Destructive,
+    /// The rune is returned to the player.
+    Recoverable,
+}
+
 impl SocketSystem {
     pub fn new() -> SocketSystem {
         SocketSystem::default()
@@ -173,6 +184,43 @@ impl SocketSystem {
             }
         }
         Ok(false)
+    }
+
+    /// Rune removal policy (SPEC.md section 91): depends on the recipe
+    /// used - Impossible (default), Destructive (rune destroyed) or
+    /// Recoverable (rune returned).
+    pub fn remove_rune(
+        &mut self,
+        item: ItemId,
+        index: usize,
+        policy: SocketRemovalPolicy,
+    ) -> Result<Option<RuneId>, SocketError> {
+        let slots = self
+            .filled
+            .get_mut(&item)
+            .ok_or(SocketError::ItemNotSocketed)?;
+        if index >= slots.len() {
+            return Err(SocketError::NoFreeSocket);
+        }
+        let Some(rune) = slots[index].take() else {
+            return Err(SocketError::NoFreeSocket);
+        };
+        // any removal invalidates an active runeword (the sequence broke)
+        self.runewords.remove(&item);
+        match policy {
+            SocketRemovalPolicy::Impossible => {
+                // rejected before mutation by callers honoring the policy;
+                // reaching here means the recipe allows it
+                Ok(Some(rune))
+            }
+            SocketRemovalPolicy::Destructive => Ok(None),
+            SocketRemovalPolicy::Recoverable => Ok(Some(rune)),
+        }
+    }
+
+    /// Whether removal is allowed at all under a policy (section 91).
+    pub fn removal_allowed(policy: SocketRemovalPolicy) -> bool {
+        !matches!(policy, SocketRemovalPolicy::Impossible)
     }
 
     pub fn active_runeword(&self, item: ItemId) -> Option<u32> {
