@@ -1,4 +1,5 @@
 pub mod actor;
+pub mod admin;
 pub mod ai;
 pub mod command;
 pub mod damage;

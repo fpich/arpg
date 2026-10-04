@@ -355,6 +355,12 @@ impl GameInstance {
         let ingested = self.command_queue.drain();
         let mut scheduled: Vec<ScheduledCommand> = Vec::new();
         for envelope in ingested {
+            tracing::trace!(
+                tick = tick.0,
+                player_identity_id = envelope.player.0,
+                command_sequence = envelope.sequence,
+                "command received"
+            );
             let admission = self
                 .scheduler
                 .admit(envelope, tick, DEFAULT_INPUT_DELAY_TICKS);
@@ -1348,7 +1354,7 @@ impl GameInstance {
 
 /// Deterministic drop seed for a monster death: BLAKE3(game seed || entity ||
 /// tick), matching the loot pipeline domain separation (SPEC.md section 71).
-fn derive_drop_seed(seed: [u8; 32], entity: EntityId, tick: Tick) -> [u8; 32] {
+pub(crate) fn derive_drop_seed(seed: [u8; 32], entity: EntityId, tick: Tick) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(&seed);
     hasher.update(&entity.0.to_le_bytes());

@@ -59,6 +59,12 @@ impl InventorySystem {
         self.locations.iter().map(|(id, loc)| (*id, loc))
     }
 
+    /// Highest minted item id, so deterministic minters can allocate the
+    /// next id above it.
+    pub fn highest_item_id(&self) -> u128 {
+        self.items.keys().map(|id| id.0).max().unwrap_or(0)
+    }
+
     /// Deterministic drop on the ground (SPEC.md section 84).
     pub fn spawn_ground(
         &mut self,

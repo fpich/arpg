@@ -52,6 +52,7 @@ tokio = { version = "1", features = ["full"] }
 quinn = "0.11"
 prost = "0.13"
 sqlx = { version = "0.8", default-features = false }
+tracing = "0.1"
 proptest = "1"
 criterion = "0.5"
 

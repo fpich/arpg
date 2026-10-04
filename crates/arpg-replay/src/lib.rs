@@ -45,6 +45,21 @@ pub enum ReplayEntry {
         payload: CommandPayload,
     },
     Transition(SessionTransition),
+    Admin {
+        tick: u64,
+        payload: AdminPayload,
+    },
+}
+
+/// Admin command recorded in a test game's replay (SPEC.md section 169:
+/// test games may record admin commands so sessions stay reproducible).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AdminPayload {
+    Spawn { def: u32, x: i32, y: i32 },
+    GiveItem { player: u32, def: u32 },
+    Teleport { player: u32, x: i32, y: i32 },
+    Kill { entity: u64 },
+    DumpRng,
 }
 
 /// Wire form of a client command, independent of live intents.
@@ -96,6 +111,11 @@ impl Replay {
 
     pub fn record_transition(&mut self, transition: SessionTransition) {
         self.entries.push(ReplayEntry::Transition(transition));
+    }
+
+    /// Record an admin command applied at the given tick (section 169).
+    pub fn record_admin(&mut self, tick: u64, payload: AdminPayload) {
+        self.entries.push(ReplayEntry::Admin { tick, payload });
     }
 
     /// Canonical binary encoding: header then entries in order.
@@ -151,6 +171,34 @@ impl Replay {
                             out.push(1);
                             out.extend_from_slice(&p.0.to_le_bytes());
                         }
+                    }
+                }
+                ReplayEntry::Admin { tick, payload } => {
+                    out.push(2);
+                    out.extend_from_slice(&tick.to_le_bytes());
+                    match payload {
+                        AdminPayload::Spawn { def, x, y } => {
+                            out.push(0);
+                            out.extend_from_slice(&def.to_le_bytes());
+                            out.extend_from_slice(&x.to_le_bytes());
+                            out.extend_from_slice(&y.to_le_bytes());
+                        }
+                        AdminPayload::GiveItem { player, def } => {
+                            out.push(1);
+                            out.extend_from_slice(&player.to_le_bytes());
+                            out.extend_from_slice(&def.to_le_bytes());
+                        }
+                        AdminPayload::Teleport { player, x, y } => {
+                            out.push(2);
+                            out.extend_from_slice(&player.to_le_bytes());
+                            out.extend_from_slice(&x.to_le_bytes());
+                            out.extend_from_slice(&y.to_le_bytes());
+                        }
+                        AdminPayload::Kill { entity } => {
+                            out.push(3);
+                            out.extend_from_slice(&entity.to_le_bytes());
+                        }
+                        AdminPayload::DumpRng => out.push(4),
                     }
                 }
             }
@@ -218,6 +266,34 @@ impl Replay {
                     return Err("bad transition tag");
                 };
                 entries.push(ReplayEntry::Transition(transition));
+            } else if kind == 2 {
+                let tick = r.u64()?;
+                let payload = match r.u8()? {
+                    0 => {
+                        let def = r.u32()?;
+                        let x = r.i32()?;
+                        let y = r.i32()?;
+                        AdminPayload::Spawn { def, x, y }
+                    }
+                    1 => {
+                        let player = r.u32()?;
+                        let def = r.u32()?;
+                        AdminPayload::GiveItem { player, def }
+                    }
+                    2 => {
+                        let player = r.u32()?;
+                        let x = r.i32()?;
+                        let y = r.i32()?;
+                        AdminPayload::Teleport { player, x, y }
+                    }
+                    3 => {
+                        let entity = r.u64()?;
+                        AdminPayload::Kill { entity }
+                    }
+                    4 => AdminPayload::DumpRng,
+                    _ => return Err("bad admin tag"),
+                };
+                entries.push(ReplayEntry::Admin { tick, payload });
             } else {
                 return Err("bad entry tag");
             }
@@ -327,6 +403,36 @@ impl<'a> Replayer<'a> {
                     },
                 };
                 self.game.submit_command(envelope);
+                Ok(())
+            }
+            ReplayEntry::Admin { payload, .. } => {
+                // Admin commands reproduce deterministically (section 169):
+                // same state + same command = same outcome.
+                let cmd = match payload {
+                    AdminPayload::Spawn { def, x, y } => arpg_sim::admin::AdminCommand::Spawn {
+                        def: *def,
+                        pos: arpg_core::WorldPos::new(*x, *y),
+                    },
+                    AdminPayload::GiveItem { player, def } => {
+                        arpg_sim::admin::AdminCommand::GiveItem {
+                            player: arpg_core::PlayerId(*player),
+                            def: arpg_core::ItemDefId(*def),
+                        }
+                    }
+                    AdminPayload::Teleport { player, x, y } => {
+                        arpg_sim::admin::AdminCommand::Teleport {
+                            player: arpg_core::PlayerId(*player),
+                            pos: arpg_core::WorldPos::new(*x, *y),
+                        }
+                    }
+                    AdminPayload::Kill { entity } => arpg_sim::admin::AdminCommand::Kill {
+                        entity: arpg_core::EntityId(*entity),
+                    },
+                    AdminPayload::DumpRng => arpg_sim::admin::AdminCommand::DumpRng,
+                };
+                self.game
+                    .apply_admin_command(&cmd)
+                    .map_err(|_| "admin command failed during replay")?;
                 Ok(())
             }
         }

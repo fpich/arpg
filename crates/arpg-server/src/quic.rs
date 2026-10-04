@@ -56,6 +56,9 @@ pub struct GameServer {
     pub endpoint: Endpoint,
     pub local_addr: SocketAddr,
     game: Arc<Mutex<GameInstance>>,
+    /// Network metrics (SPEC.md section 190). POLICY domain: counters only,
+    /// never gameplay. Optional so loopback tests can run without one.
+    metrics: Option<Arc<Mutex<arpg_metrics::Metrics>>>,
 }
 
 impl GameServer {
@@ -74,9 +77,31 @@ impl GameServer {
                 endpoint,
                 local_addr,
                 game,
+                metrics: None,
             },
             cert_der,
         ))
+    }
+
+    /// Attach a metrics collector for network byte counters (section 190).
+    pub fn set_metrics(&mut self, metrics: Arc<Mutex<arpg_metrics::Metrics>>) {
+        self.metrics = Some(metrics);
+    }
+
+    fn record_sent(&self, len: usize) {
+        if let Some(m) = &self.metrics {
+            m.lock()
+                .unwrap()
+                .add(arpg_metrics::names::NETWORK_BYTES_SENT, len as u64);
+        }
+    }
+
+    fn record_received(&self, len: usize) {
+        if let Some(m) = &self.metrics {
+            m.lock()
+                .unwrap()
+                .add(arpg_metrics::names::NETWORK_BYTES_RECEIVED, len as u64);
+        }
     }
 
     fn self_signed_config() -> Result<(ServerConfig, Vec<u8>), Box<dyn std::error::Error>> {
@@ -120,6 +145,7 @@ impl GameServer {
             Ok(b) => b,
             Err(_) => return,
         };
+        self.record_received(hello_bytes.len());
         let hello = match decode_frame::<msg::ClientHello>(&hello_bytes) {
             Ok(h) => h,
             Err(_) => return,
@@ -136,7 +162,9 @@ impl GameServer {
                 "incompatible protocol".into()
             },
         };
-        if send.write_all(&encode_frame(&reply)).await.is_err() {
+        let reply_bytes = encode_frame(&reply);
+        self.record_sent(reply_bytes.len());
+        if send.write_all(&reply_bytes).await.is_err() {
             return;
         }
         if !accepted {
@@ -153,11 +181,13 @@ impl GameServer {
             Ok(b) => b,
             Err(_) => return,
         };
+        self.record_received(join_bytes.len());
         let join = match decode_frame::<msg::JoinGameRequest>(&join_bytes) {
             Ok(j) => j,
             Err(_) => return,
         };
         let player = arpg_core::PlayerId(join.character_id);
+        tracing::info!(player_identity_id = player.0, "join request");
         let (server_tick, input_delay, datapack_hash, tick_rate) = {
             let mut game = self.game.lock().unwrap();
             if game.rules.max_players as usize <= game.state.players.len() {
@@ -185,7 +215,9 @@ impl GameServer {
             server_tick,
             input_delay_ticks: input_delay,
         };
-        if send.write_all(&encode_frame(&accepted_msg)).await.is_err() {
+        let accepted_bytes = encode_frame(&accepted_msg);
+        self.record_sent(accepted_bytes.len());
+        if send.write_all(&accepted_bytes).await.is_err() {
             return;
         }
 
@@ -216,6 +248,7 @@ impl GameServer {
 
         // Reliable command loop
         while let Ok(frame) = read_frame(&mut recv).await {
+            self.record_received(frame.len());
             if !session.is_command_accepted() {
                 break;
             }
@@ -223,6 +256,11 @@ impl GameServer {
                 Ok(w) => w,
                 Err(_) => continue, // invalid input: ignored, never a panic (section 170)
             };
+            tracing::trace!(
+                player_identity_id = wire.player_id,
+                command_sequence = wire.sequence,
+                "command received on stream"
+            );
             if let Some(sim_env) = crate::bridge::wire_to_sim(&wire) {
                 let ack = {
                     let mut game = self.game.lock().unwrap();
@@ -235,7 +273,9 @@ impl GameServer {
                         admission: "Accepted".into(),
                     }
                 };
-                if send.write_all(&encode_frame(&ack)).await.is_err() {
+                let ack_bytes = encode_frame(&ack);
+                self.record_sent(ack_bytes.len());
+                if send.write_all(&ack_bytes).await.is_err() {
                     break;
                 }
             }

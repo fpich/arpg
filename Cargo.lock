@@ -119,6 +119,7 @@ version = "0.1.0"
 dependencies = [
  "arpg-core",
  "arpg-data",
+ "arpg-metrics",
  "arpg-persistence",
  "arpg-protocol",
  "arpg-rules",
@@ -128,6 +129,7 @@ dependencies = [
  "rcgen",
  "rustls-pki-types",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -144,6 +146,7 @@ dependencies = [
  "serde",
  "smallvec",
  "thiserror 1.0.69",
+ "tracing",
 ]
 
 [[package]]
