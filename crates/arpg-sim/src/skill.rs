@@ -22,6 +22,10 @@ pub struct CostFormula {
 pub enum TimingFormula {
     Instant,
     Ticks(u16),
+    /// Attack-scaled timing (SPEC.md section 56): the base ticks
+    /// shrink through the AttackSpeed curve instead of CastSpeed, so
+    /// melee swing rate benefits from attack-speed bonuses.
+    AttackTicks(u16),
 }
 
 /// Typed skill intermediate representation (SPEC.md section 36). The IR is

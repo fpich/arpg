@@ -1488,6 +1488,25 @@ impl GameInstance {
                     impact_tick: 1,
                     recovery_ticks: 0,
                 },
+                // Attack speed (SPEC.md section 56): melee swings scale
+                // through the AttackSpeed curve from the attack bonus map.
+                crate::skill::TimingFormula::AttackTicks(t) => {
+                    let attack_bonus = self
+                        .attack_speed_bonus_bp
+                        .get(&player)
+                        .copied()
+                        .unwrap_or(0);
+                    let effective = crate::speeds::attack_interval_ticks(
+                        t,
+                        attack_bonus,
+                        &crate::speeds::SpeedSystems::default(),
+                    );
+                    crate::actor::ActionTiming {
+                        windup_ticks: effective,
+                        impact_tick: effective,
+                        recovery_ticks: effective,
+                    }
+                }
             },
             None => return,
         };
@@ -2386,7 +2405,10 @@ fn translate_skill(
             mana_cost: program.mana_cost,
             life_cost: 0,
         },
-        timing: if program.cast_ticks == 0 {
+        timing: if program.damage_type == 0 && program.missile.is_none() {
+            // physical melee swings scale with attack speed (56)
+            crate::skill::TimingFormula::AttackTicks(program.cast_ticks.max(1))
+        } else if program.cast_ticks == 0 {
             crate::skill::TimingFormula::Instant
         } else {
             crate::skill::TimingFormula::Ticks(program.cast_ticks)

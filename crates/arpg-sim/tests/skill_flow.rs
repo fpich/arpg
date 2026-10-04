@@ -357,3 +357,49 @@ fn open_wounds_bleeds_over_time() {
         "bleeding expires after the dot is paid"
     );
 }
+
+#[test]
+fn attack_speed_bonus_shrinks_swing_time() {
+    let mut inst = setup();
+    // a melee swing with base 4 ticks
+    inst.register_skill(arpg_sim::skill::SkillDefinition {
+        id: SkillId(7),
+        targeting: TargetingSpec::Entity,
+        cost: Default::default(),
+        timing: arpg_sim::skill::TimingFormula::AttackTicks(4),
+        program: SkillProgram {
+            ops: vec![SkillOp::DealDamage(DamagePacket {
+                physical: DamageRange::new(10, 10),
+                ..DamagePacket::default()
+            })],
+        },
+    })
+    .unwrap();
+    inst.add_player(PlayerId(1), WorldPos::new(0, 0));
+    inst.attack_speed_bonus_bp.insert(PlayerId(1), 10_000);
+    let monster = inst.spawn_monster_with_tc(WorldPos::new(256, 0), None);
+    if let Some(m) = inst.monsters.get_mut(&monster) {
+        m.life = 500;
+    }
+    let life_before = inst.monsters.get(&monster).unwrap().life;
+    inst.submit_command(skill_cmd(
+        PlayerId(1),
+        1,
+        SkillId(7),
+        Some(WorldPos::new(256, 0)),
+    ));
+    let mut hit_at = None;
+    for t in 0..(arpg_sim::DEFAULT_INPUT_DELAY_TICKS + 6) {
+        inst.tick();
+        let life = inst.monsters.get(&monster).unwrap().life;
+        if life < life_before {
+            hit_at = Some(t);
+            break;
+        }
+    }
+    assert!(
+        hit_at.is_some_and(|t| t <= arpg_sim::DEFAULT_INPUT_DELAY_TICKS + 3),
+        "attack speed must shorten the swing below the 4-tick baseline"
+    );
+    let _ = life_before;
+}
