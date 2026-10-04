@@ -242,6 +242,23 @@ impl GameInstance {
         Ok(())
     }
 
+    /// Translate the datapack's skill programs (arpg-data
+    /// SkillProgramData) into typed IR and register them. Called once at
+    /// startup so classes and shared attacks come from the datapack
+    /// (SPEC.md sections 35-37, 151).
+    pub fn register_datapack_skills(&mut self) -> Result<(), crate::skill::SkillValidationError> {
+        let defs: Vec<crate::skill::SkillDefinition> = self
+            .data
+            .skills
+            .values()
+            .filter_map(translate_skill)
+            .collect();
+        for def in defs {
+            self.register_skill(def)?;
+        }
+        Ok(())
+    }
+
     /// Plug an AI brain; it is consulted during Perception/AiDecision.
     pub fn set_ai_brain(&mut self, brain: Box<dyn crate::ai::AiBrain>) {
         self.ai_brain = Some(brain);
@@ -709,6 +726,19 @@ impl GameInstance {
                 .values()
                 .find(|p| p.pos == pos && EntityId(p.player.0 as u64) != caster)
                 .map(|p| EntityId(p.player.0 as u64))
+                .or_else(|| {
+                    // position-targeted skills hit the closest monster to the
+                    // target position (ties resolved by entity id, canonical)
+                    self.monsters
+                        .values()
+                        .filter(|m| m.entity != caster)
+                        .min_by_key(|m| {
+                            let dx = m.pos.x - pos.x;
+                            let dy = m.pos.y - pos.y;
+                            (dx * dx + dy * dy, m.entity.0)
+                        })
+                        .map(|m| m.entity)
+                })
         });
         if let Some(target) = target {
             if outcome.damage != 0 {
@@ -1228,4 +1258,72 @@ fn derive_drop_seed(seed: [u8; 32], entity: EntityId, tick: Tick) -> [u8; 32] {
     hasher.update(&entity.0.to_le_bytes());
     hasher.update(&tick.0.to_le_bytes());
     *hasher.finalize().as_bytes()
+}
+
+/// Translate a datapack skill into the sim's typed skill IR. Returns None
+/// for nominal skills without a program.
+fn translate_skill(
+    data_skill: &arpg_data::SkillDefinition,
+) -> Option<crate::skill::SkillDefinition> {
+    let program = data_skill.program.as_ref()?;
+    let targeting = match program.targeting {
+        0 => crate::skill::TargetingSpec::SelfTarget,
+        1 => crate::skill::TargetingSpec::Entity,
+        _ => crate::skill::TargetingSpec::Position,
+    };
+    let range = crate::damage::DamageRange::new(program.damage, program.damage);
+    let damage = crate::damage::DamagePacket {
+        physical: if program.damage_type == 0 {
+            range
+        } else {
+            crate::damage::DamageRange::new(0, 0)
+        },
+        magic: if program.damage_type == 1 {
+            range
+        } else {
+            crate::damage::DamageRange::new(0, 0)
+        },
+        fire: if program.damage_type == 2 {
+            range
+        } else {
+            crate::damage::DamageRange::new(0, 0)
+        },
+        cold: if program.damage_type == 3 {
+            range
+        } else {
+            crate::damage::DamageRange::new(0, 0)
+        },
+        lightning: if program.damage_type == 4 {
+            range
+        } else {
+            crate::damage::DamageRange::new(0, 0)
+        },
+        poison: if program.damage_type == 5 {
+            Some(crate::damage::PoisonPayload {
+                total_damage_fp: program.damage * 256,
+                remaining_ticks: 10,
+                accumulator: 0,
+            })
+        } else {
+            None
+        },
+    };
+    let mut ops = vec![crate::skill::SkillOp::DealDamage(damage)];
+    if let Some(missile) = program.missile {
+        ops.push(crate::skill::SkillOp::SpawnMissile(missile));
+    }
+    Some(crate::skill::SkillDefinition {
+        id: data_skill.id,
+        targeting,
+        cost: crate::skill::CostFormula {
+            mana_cost: program.mana_cost,
+            life_cost: 0,
+        },
+        timing: if program.cast_ticks == 0 {
+            crate::skill::TimingFormula::Instant
+        } else {
+            crate::skill::TimingFormula::Ticks(program.cast_ticks)
+        },
+        program: crate::skill::SkillProgram { ops },
+    })
 }

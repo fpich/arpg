@@ -2,7 +2,9 @@
 //! content compiled into `GameData` at startup. Sources are normalized Rust
 //! tables here; the runtime never depends on a source file format.
 
-use crate::{GameData, ItemDefinition, LevelDefinition, MonsterDefinition, SkillDefinition};
+use crate::{
+    GameData, ItemDefinition, LevelDefinition, MonsterDefinition, SkillDefinition, SkillProgramData,
+};
 use arpg_core::{ClassId, ItemId, LevelDefId, MonsterDefId, SkillId};
 use std::collections::BTreeMap;
 
@@ -547,6 +549,89 @@ pub const RECIPES: [(&str, &[&str]); 5] = [
 
 /// Compile the reference datapack into a `GameData` (section 151
 /// pipeline: normalized sources -> semantic validation -> compilation).
+/// Signature skill programs per class: class id -> (damage, type, mana,
+/// cast ticks, missile). Types: 0 physical, 1 magic, 2 fire, 3 cold,
+/// 4 lightning, 5 poison.
+pub const CLASS_SKILL_PROGRAMS: [(&ClassDefinition, SkillProgramData); 7] = [
+    (
+        &CLASSES[0],
+        SkillProgramData {
+            targeting: 2,
+            damage: 20,
+            damage_type: 0,
+            mana_cost: 4,
+            cast_ticks: 0,
+            missile: Some(1),
+        },
+    ), // Amazon: Javelin
+    (
+        &CLASSES[1],
+        SkillProgramData {
+            targeting: 1,
+            damage: 16,
+            damage_type: 0,
+            mana_cost: 3,
+            cast_ticks: 0,
+            missile: None,
+        },
+    ), // Assassin: Claw
+    (
+        &CLASSES[2],
+        SkillProgramData {
+            targeting: 2,
+            damage: 14,
+            damage_type: 1,
+            mana_cost: 6,
+            cast_ticks: 2,
+            missile: None,
+        },
+    ), // Necromancer: Skeleton
+    (
+        &CLASSES[3],
+        SkillProgramData {
+            targeting: 1,
+            damage: 25,
+            damage_type: 0,
+            mana_cost: 2,
+            cast_ticks: 0,
+            missile: None,
+        },
+    ), // Barbarian: Bash
+    (
+        &CLASSES[4],
+        SkillProgramData {
+            targeting: 1,
+            damage: 18,
+            damage_type: 1,
+            mana_cost: 5,
+            cast_ticks: 1,
+            missile: None,
+        },
+    ), // Paladin: Holy Bolt
+    (
+        &CLASSES[5],
+        SkillProgramData {
+            targeting: 2,
+            damage: 22,
+            damage_type: 2,
+            mana_cost: 8,
+            cast_ticks: 2,
+            missile: Some(1),
+        },
+    ), // Sorceress: Fireball
+    (
+        &CLASSES[6],
+        SkillProgramData {
+            targeting: 1,
+            damage: 15,
+            damage_type: 3,
+            mana_cost: 5,
+            cast_ticks: 1,
+            missile: None,
+        },
+    ), // Druid: Ice
+];
+
 /// The content hash is derived from the compiled content, not the sources.
 pub fn compile_reference_datapack() -> GameData {
     let mut data = GameData {
@@ -557,25 +642,60 @@ pub fn compile_reference_datapack() -> GameData {
 
     // skills: one signature skill per class plus shared base attacks
     let mut skills = BTreeMap::new();
-    for class in &CLASSES {
+    for (class, program) in CLASS_SKILL_PROGRAMS {
         skills.insert(
             class.primary_skill,
             SkillDefinition {
                 id: class.primary_skill,
                 name: format!("{} Signature", class.name),
+                program: Some(program.clone()),
             },
         );
     }
-    for (id, name) in [
-        (SkillId(1), "Attack"),
-        (SkillId(2), "Kick"),
-        (SkillId(3), "Throw"),
+    for (id, name, program) in [
+        (
+            SkillId(1),
+            "Attack",
+            SkillProgramData {
+                targeting: 1,
+                damage: 12,
+                damage_type: 0,
+                mana_cost: 0,
+                cast_ticks: 0,
+                missile: None,
+            },
+        ),
+        (
+            SkillId(2),
+            "Kick",
+            SkillProgramData {
+                targeting: 1,
+                damage: 8,
+                damage_type: 0,
+                mana_cost: 0,
+                cast_ticks: 0,
+                missile: None,
+            },
+        ),
+        (
+            SkillId(3),
+            "Throw",
+            SkillProgramData {
+                targeting: 2,
+                damage: 10,
+                damage_type: 0,
+                mana_cost: 0,
+                cast_ticks: 0,
+                missile: Some(1),
+            },
+        ),
     ] {
         skills.insert(
             id,
             SkillDefinition {
                 id,
                 name: name.into(),
+                program: Some(program),
             },
         );
     }

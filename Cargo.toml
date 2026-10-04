@@ -13,6 +13,7 @@ members = [
     "crates/arpg-replay",
     "crates/arpg-tools",
     "crates/arpg-fuzz",
+    "crates/arpg-metrics",
 ]
 
 [workspace.package]
