@@ -50,6 +50,18 @@ pub struct MonsterDefinition {
     pub id: MonsterDefId,
     pub name: String,
     pub base_life: i64,
+    /// Melee damage per hit.
+    pub damage: i64,
+    /// Movement speed in fixed-point tiles per tick (256 = 1 tile).
+    pub speed_fp: i32,
+    /// Aggro radius in tiles.
+    pub aggro_range: i32,
+    /// Experience granted on kill.
+    pub experience: u64,
+    /// True for ranged attackers (they stop and shoot).
+    pub ranged: bool,
+    /// Act index (0-4) this monster belongs to.
+    pub act: u8,
 }
 
 #[derive(Debug, Clone)]

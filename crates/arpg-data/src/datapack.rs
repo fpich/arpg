@@ -549,6 +549,55 @@ pub const RECIPES: [(&str, &[&str]); 5] = [
 
 /// Compile the reference datapack into a `GameData` (section 151
 /// pipeline: normalized sources -> semantic validation -> compilation).
+/// Expanded bestiary (SPEC.md sections 57, 193): (name, damage, speed_fp,
+/// aggro_range, experience, ranged, act). 6 species per act, 5 acts.
+pub const BESTIARY: [(&str, i64, i32, i32, u64, bool, u8); 30] = [
+    // Act 1 - Den of Evil: weak melee creatures
+    ("Fallen", 6, 256, 6, 15, false, 0),
+    ("Fallen Shaman", 8, 224, 7, 25, true, 0),
+    ("Zombie", 9, 128, 5, 18, false, 0),
+    ("Skeleton", 10, 256, 6, 20, false, 0),
+    ("Gargantuan Beast", 14, 192, 5, 35, false, 0),
+    ("Dark Hunter", 12, 320, 8, 30, false, 0),
+    // Act 2 - Desert: mixed, first dedicated ranged
+    ("Scavenger", 13, 320, 7, 32, false, 1),
+    ("Mummy", 15, 96, 5, 40, false, 1),
+    ("Sand Raider", 16, 256, 7, 45, false, 1),
+    ("Vulture Demon", 14, 384, 9, 42, true, 1),
+    ("Cliff Lurker", 18, 160, 4, 48, false, 1),
+    ("Tomb Viper", 17, 288, 7, 50, false, 1),
+    // Act 3 - Jungle: faster, harder
+    ("Fetish", 19, 352, 8, 55, false, 2),
+    ("Sarina", 21, 256, 7, 60, false, 2),
+    ("Marsh Horror", 22, 160, 6, 62, false, 2),
+    ("Swamp Ghost", 20, 224, 9, 58, true, 2),
+    ("Jungle Stalker", 23, 288, 7, 65, false, 2),
+    ("Treehead Woodfist", 25, 192, 5, 70, false, 2),
+    // Act 4 - Hell: dangerous
+    ("Demon Imp", 26, 320, 8, 80, true, 3),
+    ("Hell Boar", 30, 224, 6, 85, false, 3),
+    ("Pit Lord", 34, 256, 7, 95, false, 3),
+    ("Corrupted Rogue", 28, 352, 8, 88, false, 3),
+    ("Blade Sister", 32, 288, 7, 92, true, 3),
+    ("Venom Lord", 35, 256, 7, 98, false, 3),
+    // Act 5 - Mountains: endgame
+    ("Frozen Horror", 40, 192, 6, 120, false, 4),
+    ("Doom Knight", 42, 256, 7, 130, false, 4),
+    ("Death Lord", 45, 224, 7, 140, false, 4),
+    ("Ice Boar", 38, 320, 7, 115, false, 4),
+    ("Hell Spawn", 44, 288, 8, 145, true, 4),
+    ("Baal Minion", 48, 256, 8, 160, false, 4),
+];
+
+/// Bosses: one per act (name, damage, experience).
+pub const BOSSES: [(&str, i64, u64); 5] = [
+    ("Blood Raven", 25, 200),
+    ("The Smith", 40, 350),
+    ("Duriel", 55, 500),
+    ("Mephisto", 70, 700),
+    ("Baal", 90, 1000),
+];
+
 /// Signature skill programs per class: class id -> (damage, type, mana,
 /// cast ticks, missile). Types: 0 physical, 1 magic, 2 fire, 3 cold,
 /// 4 lightning, 5 poison.
@@ -701,44 +750,43 @@ pub fn compile_reference_datapack() -> GameData {
     }
     data.skills = skills;
 
-    // monsters: regular per act plus one boss per act
+    // monsters: 6 regular species per act (5 acts) plus one boss per act.
+    // Stats scale by act: life/damage/xp grow, ranged species appear
+    // from act 2 on. Speed is fixed-point (256 = 1 tile/tick).
     let mut monsters = BTreeMap::new();
-    for (i, name) in [
-        "Fallen",
-        "Zombie",
-        "Skeleton",
-        "Quill Beast",
-        "Gargantuan Beast",
-        "Cliff Lurker",
-        "Mummy",
-        "Sand Raider",
-        "Vulture",
-        "Willowisp",
-    ]
-    .iter()
-    .enumerate()
-    {
+    for (i, entry) in BESTIARY.iter().enumerate() {
+        let (name, damage, speed_fp, aggro_range, experience, ranged, act) = *entry;
         let id = MonsterDefId(i as u32);
         monsters.insert(
             id,
             MonsterDefinition {
                 id,
-                name: (*name).into(),
-                base_life: 50 + 10 * i as i64,
+                name: name.into(),
+                base_life: 40 + 30 * act as i64 + 12 * i as i64,
+                damage,
+                speed_fp,
+                aggro_range,
+                experience,
+                ranged,
+                act,
             },
         );
     }
-    for (i, boss) in ["Blood Raven", "The Smith", "Duriel", "Mephisto", "Baal"]
-        .iter()
-        .enumerate()
-    {
+    for (i, boss) in BOSSES.iter().enumerate() {
+        let (name, damage, experience) = *boss;
         let id = MonsterDefId(1000 + i as u32);
         monsters.insert(
             id,
             MonsterDefinition {
                 id,
-                name: (*boss).into(),
-                base_life: 500 + 500 * i as i64,
+                name: name.into(),
+                base_life: 600 + 400 * i as i64,
+                damage,
+                speed_fp: 192,
+                aggro_range: 8,
+                experience,
+                ranged: i % 2 == 1,
+                act: i as u8,
             },
         );
     }

@@ -37,6 +37,13 @@ pub struct MonsterState {
     pub life: i64,
     /// Loot table dropped on death (SPEC.md sections 71-72).
     pub treasure_class: Option<crate::item::TreasureClass>,
+    /// Datapack definition stats (SPEC.md sections 57, 112): fixed at
+    /// spawn, never retroactively modified.
+    pub damage: i64,
+    pub speed_fp: i32,
+    pub aggro_range: i32,
+    pub experience: u64,
+    pub ranged: bool,
 }
 
 #[derive(Debug, Default)]
@@ -142,6 +149,10 @@ pub struct GameInstance {
     pub summons: crate::summon::SummonSystem,
     /// Sockets, runes and runewords (SPEC.md sections 76, 193, 199).
     pub sockets: crate::socket::SocketSystem,
+    /// Runtime metrics (SPEC.md section 190). POLICY domain: never part of
+    /// the state hash, never alters gameplay. Optional so replays and
+    /// tests can run without a collector.
+    pub metrics: Option<std::sync::Arc<std::sync::Mutex<arpg_metrics::Metrics>>>,
     /// XP pipeline configuration (SPEC.md section 110).
     pub xp_pipeline: crate::social::XpPipeline,
 }
@@ -191,6 +202,7 @@ impl GameInstance {
             hostility: crate::social::HostilityMatrix::default(),
             summons: crate::summon::SummonSystem::new(),
             sockets: crate::socket::SocketSystem::new(),
+            metrics: None,
             xp_pipeline: crate::social::XpPipeline::D2_LIKE,
         }
     }
@@ -274,17 +286,57 @@ impl GameInstance {
         home: WorldPos,
         treasure_class: Option<crate::item::TreasureClass>,
     ) -> EntityId {
+        self.spawn_monster_internal(MonsterState {
+            entity: EntityId(0),
+            pos: home,
+            life: 50,
+            treasure_class,
+            damage: 10,
+            speed_fp: 256,
+            aggro_range: 6,
+            experience: 20,
+            ranged: false,
+        })
+    }
+
+    /// Spawn a monster from its datapack definition (SPEC.md sections 57,
+    /// 112): stats are fixed at spawn from the definition.
+    pub fn spawn_monster_def(
+        &mut self,
+        def_id: arpg_core::MonsterDefId,
+        home: WorldPos,
+    ) -> EntityId {
+        let def = self.data.monsters.get(&def_id).cloned();
+        let (life, damage, speed_fp, aggro_range, experience, ranged) = match def {
+            Some(d) => (
+                d.base_life,
+                d.damage,
+                d.speed_fp,
+                d.aggro_range,
+                d.experience,
+                d.ranged,
+            ),
+            None => (50, 10, 256, 6, 20, false),
+        };
+        self.spawn_monster_internal(MonsterState {
+            entity: EntityId(0),
+            pos: home,
+            life,
+            treasure_class: None,
+            damage,
+            speed_fp,
+            aggro_range,
+            experience,
+            ranged,
+        })
+    }
+
+    fn spawn_monster_internal(&mut self, mut template: MonsterState) -> EntityId {
         self.next_monster_entity += 1;
         let entity = EntityId(self.next_monster_entity);
-        self.monsters.insert(
-            entity,
-            MonsterState {
-                entity,
-                pos: home,
-                life: 50,
-                treasure_class,
-            },
-        );
+        template.entity = entity;
+        let home = template.pos;
+        self.monsters.insert(entity, template);
         self.actors.insert(entity, crate::actor::Actor::new(entity));
         if let Some(brain) = self.ai_brain.as_mut() {
             brain.on_spawn(entity, home);
@@ -296,6 +348,7 @@ impl GameInstance {
     }
 
     pub fn tick(&mut self) -> TickResult {
+        let started = std::time::Instant::now();
         self.state.tick = self.state.tick.next();
         let tick = self.state.tick;
 
@@ -305,6 +358,17 @@ impl GameInstance {
             let admission = self
                 .scheduler
                 .admit(envelope, tick, DEFAULT_INPUT_DELAY_TICKS);
+            if let Some(metrics) = &self.metrics {
+                let mut m = metrics.lock().unwrap();
+                m.incr(arpg_metrics::names::COMMANDS_RECEIVED);
+                match admission {
+                    Admission::Accepted => m.incr(arpg_metrics::names::COMMANDS_ACCEPTED),
+                    Admission::Duplicate => m.incr(arpg_metrics::names::COMMANDS_REJECTED),
+                    Admission::RejectedTooOld => m.incr(arpg_metrics::names::COMMANDS_REJECTED),
+                    Admission::RejectedInvalid => m.incr(arpg_metrics::names::COMMANDS_REJECTED),
+                    Admission::Deferred => {}
+                }
+            }
             if let Admission::Accepted = admission {
                 // kept in scheduler; collected via take_due below
             }
@@ -394,6 +458,22 @@ impl GameInstance {
         self.summons.hash_bytes(&mut hash_input);
         self.sockets.hash_bytes(&mut hash_input);
         let state_hash = arpg_core::hash::state_hash(&hash_input);
+        if let Some(metrics) = &self.metrics {
+            let mut m = metrics.lock().unwrap();
+            m.observe_duration(arpg_metrics::names::GAME_TICK_SECONDS, started.elapsed());
+            m.set_gauge(
+                arpg_metrics::names::GAME_ENTITY_COUNT,
+                self.actors.len() as f64,
+            );
+            m.set_gauge(
+                arpg_metrics::names::GAME_MONSTER_COUNT,
+                self.monsters.len() as f64,
+            );
+            m.set_gauge(
+                arpg_metrics::names::GAME_MISSILE_COUNT,
+                self.missiles.len() as f64,
+            );
+        }
 
         TickResult {
             tick,
@@ -539,7 +619,7 @@ impl GameInstance {
     /// A monster attacks a player: melee-range damage applied through the
     /// normal damage path so kill credit and PendingDeath work (SPEC.md
     /// sections 13-14, 46).
-    fn monster_attack(&mut self, monster: EntityId, target: EntityId) {
+    pub fn monster_attack(&mut self, monster: EntityId, target: EntityId) {
         let Some(m) = self.monsters.get(&monster) else {
             return;
         };
@@ -555,7 +635,7 @@ impl GameInstance {
         if !within_range {
             return;
         }
-        let amount = 5i64;
+        let amount = m.damage;
         self.apply_damage(target, monster, amount);
     }
 
@@ -954,7 +1034,11 @@ impl GameInstance {
     /// Multiplayer XP pipeline (SPEC.md section 110): participants are the
     /// alive players; party members share via the party distribution.
     fn award_monster_xp(&mut self, monster: EntityId) {
-        const MONSTER_BASE_XP: u64 = 50;
+        let base_xp = self
+            .monsters
+            .get(&monster)
+            .map(|m| m.experience)
+            .unwrap_or(50);
         let participants: Vec<(PlayerId, i64)> = self
             .state
             .players
@@ -964,13 +1048,12 @@ impl GameInstance {
             .collect();
         let awards = self
             .xp_pipeline
-            .distribute(MONSTER_BASE_XP, &participants, &self.parties);
+            .distribute(base_xp, &participants, &self.parties);
         for (player, xp) in awards {
             if let Some(p) = self.state.players.get_mut(&player) {
                 p.experience = p.experience.saturating_add(xp);
             }
         }
-        let _ = monster;
     }
 
     /// LootResolution phase (SPEC.md section 71): roll queued drops onto the
