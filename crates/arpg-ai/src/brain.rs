@@ -35,6 +35,13 @@ impl AiBrain for HfsmBrain {
             if !agent.should_think(tick, self.params.think_interval_ticks) {
                 continue;
             }
+            // per-monster params from the datapack definition (sections
+            // 57, 60): aggro range is per-species, defaults to the shared
+            // params when the view has no stats for this entity
+            let mut params = self.params;
+            if let Some((_, stats)) = view.monster_stats.iter().find(|(e, _)| *e == *entity) {
+                params.aggro_radius = stats.aggro_range_fp;
+            }
             // monsters see players as enemies
             let enemies: Vec<PerceivedEntity> = view
                 .players
@@ -51,7 +58,7 @@ impl AiBrain for HfsmBrain {
                 .find(|(e, _)| *e == *entity)
                 .map(|(_, p)| *p)
                 .unwrap_or(agent.blackboard.home_position);
-            let intent = agent.think(tick, current_pos, &perception, &self.params);
+            let intent = agent.think(tick, current_pos, &perception, &params);
             let command = match intent {
                 AiIntent::MoveTo(pos) => AiCommand::MoveTo(pos),
                 AiIntent::AttackTarget(t) => AiCommand::Attack(t),

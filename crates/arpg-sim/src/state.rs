@@ -602,6 +602,19 @@ impl GameInstance {
                 .map(|p| (EntityId(p.player.0 as u64), p.pos))
                 .collect(),
             monsters: self.monsters.values().map(|m| (m.entity, m.pos)).collect(),
+            monster_stats: self
+                .monsters
+                .values()
+                .map(|m| {
+                    (
+                        m.entity,
+                        crate::ai::MonsterPerception {
+                            aggro_range_fp: m.aggro_range as i64 * 256,
+                            ranged: m.ranged,
+                        },
+                    )
+                })
+                .collect(),
         };
         let commands = brain.think(tick, &view);
         for (entity, command) in commands {

@@ -6,6 +6,16 @@ use arpg_core::{EntityId, Tick, WorldPos};
 pub struct AiWorldView {
     pub players: Vec<(EntityId, WorldPos)>,
     pub monsters: Vec<(EntityId, WorldPos)>,
+    /// Per-monster perception stats from the datapack definition (SPEC.md
+    /// sections 57, 60): aggro range in fixed points, ranged flag.
+    pub monster_stats: Vec<(EntityId, MonsterPerception)>,
+}
+
+/// Datapack-backed perception stats for one monster.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MonsterPerception {
+    pub aggro_range_fp: i64,
+    pub ranged: bool,
 }
 
 /// A command produced by an AI brain. The sim applies them like client
