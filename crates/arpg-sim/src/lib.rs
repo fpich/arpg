@@ -13,6 +13,7 @@ pub mod loot;
 pub mod missile;
 pub mod pack;
 pub mod phase;
+pub mod prediction;
 pub mod quest;
 pub mod replication;
 pub mod scheduler;
