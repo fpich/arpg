@@ -204,6 +204,7 @@ impl Merchant {
             durability: Some(50),
             flags: 0,
             charges: None,
+            hands: Default::default(),
         })
     }
 }

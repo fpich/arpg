@@ -37,6 +37,7 @@ fn spawn_potion_in_belt(inst: &mut GameInstance, def: ItemDefId) -> ItemId {
         durability: None,
         flags: 0,
         charges: None,
+        hands: Default::default(),
     };
     inst.inventory
         .spawn_ground(item, arpg_core::LevelInstanceId(0), WorldPos::new(0, 0));

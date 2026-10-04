@@ -153,6 +153,7 @@ fn inventory_move_is_transactional() {
         durability: None,
         flags: 0,
         charges: None,
+        hands: Default::default(),
     };
     let level = LevelInstanceId(1);
     inv.spawn_ground(item, level, WorldPos::new(0, 0));
@@ -188,6 +189,7 @@ fn simultaneous_pickup_first_wins() {
         durability: None,
         flags: 0,
         charges: None,
+        hands: Default::default(),
     };
     let level = LevelInstanceId(1);
     inv.spawn_ground(item, level, WorldPos::new(0, 0));
@@ -224,6 +226,7 @@ fn slot_conflicts_are_rejected() {
             durability: None,
             flags: 0,
             charges: None,
+            hands: Default::default(),
         };
         inv.spawn_ground(item, LevelInstanceId(1), WorldPos::new(0, 0));
     }
@@ -258,6 +261,7 @@ fn stash_positions_are_distinct() {
             durability: None,
             flags: 0,
             charges: None,
+            hands: Default::default(),
         };
         inv.spawn_ground(item, level, WorldPos::new(i as i32 * 256, 0));
         let ground = ItemLocation::Ground(level, WorldPos::new(i as i32 * 256, 0));
@@ -298,6 +302,7 @@ fn weapon_swap_exchanges_loadouts() {
         durability: None,
         flags: 0,
         charges: None,
+        hands: Default::default(),
     };
     use arpg_sim::item::EquipmentSlot as Slot;
     let primary = mk(1, 2001);
@@ -357,4 +362,85 @@ fn weapon_swap_exchanges_loadouts() {
             Slot::PrimarySet
         ))
     );
+}
+
+#[test]
+fn two_handed_weapon_reserves_both_hand_slots() {
+    let mut inv = InventorySystem::new();
+    let mk = |id: u128, hands: arpg_sim::item::ItemHands| ItemInstance {
+        id: ItemId(id),
+        definition: ItemDefId(30),
+        quality: ItemQuality::Normal,
+        item_level: 1,
+        generation_seed: [0; 32],
+        affixes: smallvec::SmallVec::new(),
+        sockets: smallvec::SmallVec::new(),
+        durability: None,
+        flags: 0,
+        charges: None,
+        hands,
+    };
+    let ground = || ItemLocation::Ground(LevelInstanceId(0), WorldPos::new(0, 0));
+    inv.spawn_ground(
+        mk(1, arpg_sim::item::ItemHands::TwoHanded),
+        LevelInstanceId(0),
+        WorldPos::new(0, 0),
+    );
+    inv.pick_up(
+        PlayerId(1),
+        ItemId(1),
+        ground(),
+        ItemLocation::Equipment(PlayerId(1), EquipmentSlot::MainHand),
+    )
+    .expect("equip two-handed in main hand");
+    assert_eq!(
+        inv.hand_slot_owner(PlayerId(1), EquipmentSlot::OffHand),
+        Some(ItemId(1)),
+        "the off-hand slot is reserved by the two-handed weapon"
+    );
+    // an off-hand item cannot join while the two-hander holds both slots
+    inv.spawn_ground(
+        mk(2, arpg_sim::item::ItemHands::OneHanded),
+        LevelInstanceId(0),
+        WorldPos::new(0, 0),
+    );
+    assert!(inv
+        .pick_up(
+            PlayerId(1),
+            ItemId(2),
+            ground(),
+            ItemLocation::Equipment(PlayerId(1), EquipmentSlot::OffHand)
+        )
+        .is_err());
+    // moving the two-hander to the inventory frees both slots
+    inv.move_item(
+        ItemId(1),
+        ItemLocation::Equipment(PlayerId(1), EquipmentSlot::MainHand),
+        ItemLocation::PlayerInventory(PlayerId(1), GridPos { x: 0, y: 0 }),
+    )
+    .expect("unequip");
+    assert_eq!(
+        inv.hand_slot_owner(PlayerId(1), EquipmentSlot::OffHand),
+        None
+    );
+    // dual wield: two one-handed weapons coexist
+    inv.pick_up(
+        PlayerId(1),
+        ItemId(2),
+        ground(),
+        ItemLocation::Equipment(PlayerId(1), EquipmentSlot::MainHand),
+    )
+    .expect("equip one-handed main hand");
+    inv.spawn_ground(
+        mk(3, arpg_sim::item::ItemHands::OneHanded),
+        LevelInstanceId(0),
+        WorldPos::new(0, 0),
+    );
+    inv.pick_up(
+        PlayerId(1),
+        ItemId(3),
+        ground(),
+        ItemLocation::Equipment(PlayerId(1), EquipmentSlot::OffHand),
+    )
+    .expect("one-handed off-hand is allowed");
 }

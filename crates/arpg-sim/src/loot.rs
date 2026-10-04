@@ -59,6 +59,7 @@ impl LootRoller {
                     durability: Some(50),
                     flags: 0,
                     charges: None,
+                    hands: Default::default(),
                 });
                 self.next_item_id += 1;
                 break;

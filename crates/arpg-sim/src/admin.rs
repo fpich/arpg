@@ -112,6 +112,7 @@ impl GameInstance {
                     durability: None,
                     flags: 0,
                     charges: None,
+                    hands: Default::default(),
                 };
                 let pos = self
                     .state

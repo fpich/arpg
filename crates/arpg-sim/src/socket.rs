@@ -277,6 +277,7 @@ mod tests {
             durability: None,
             flags: 1,
             charges: None,
+            hands: Default::default(),
         };
         sys.declare_sockets(ItemId(id), capacity);
         (item, sys)

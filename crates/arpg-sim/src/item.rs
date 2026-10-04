@@ -32,6 +32,17 @@ pub struct ItemInstance {
     /// with a current and maximum charge count. Charges are persistent
     /// state on the instance; `Recharge` at a merchant restores them.
     pub charges: Option<ChargeState>,
+    /// Hand occupancy (SPEC.md section 77): a two-handed weapon reserves
+    /// both hand slots; only one-handed weapons may dual wield.
+    pub hands: ItemHands,
+}
+
+/// Weapon hand occupancy (SPEC.md section 77).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ItemHands {
+    #[default]
+    OneHanded,
+    TwoHanded,
 }
 
 /// Charge pool carried by a charged item (SPEC.md section 79).

@@ -131,12 +131,107 @@ impl InventorySystem {
                 return Err(ItemError::SlotOccupied);
             }
         }
+        // two-handed occupancy (SPEC.md section 77): equipping a
+        // two-handed weapon in either hand reserves both hand slots
+        if let ItemLocation::Equipment(player, slot) = to {
+            let two_handed = self
+                .items
+                .get(&id)
+                .is_some_and(|i| i.hands == crate::item::ItemHands::TwoHanded);
+            if two_handed {
+                let other = match slot {
+                    crate::item::EquipmentSlot::MainHand => {
+                        Some(crate::item::EquipmentSlot::OffHand)
+                    }
+                    crate::item::EquipmentSlot::OffHand => {
+                        Some(crate::item::EquipmentSlot::MainHand)
+                    }
+                    _ => None,
+                };
+                if let Some(other) = other {
+                    let other_key = slot_key(ItemLocation::Equipment(player, other));
+                    if let Some(&occupant) = self.slot_owner.get(&other_key) {
+                        if occupant != id {
+                            return Err(ItemError::SlotOccupied);
+                        }
+                    }
+                }
+            }
+        }
+        // a one-handed item may not take the slot of an equipped
+        // two-handed weapon: the off-hand reservation blocks it
+        if let ItemLocation::Equipment(player, slot) = to {
+            let other = match slot {
+                crate::item::EquipmentSlot::MainHand => Some(crate::item::EquipmentSlot::OffHand),
+                crate::item::EquipmentSlot::OffHand => Some(crate::item::EquipmentSlot::MainHand),
+                _ => None,
+            };
+            if let Some(other) = other {
+                let reserved = self
+                    .slot_owner
+                    .get(&slot_key(ItemLocation::Equipment(player, other)))
+                    .and_then(|&oid| self.items.get(&oid))
+                    .is_some_and(|i| i.hands == crate::item::ItemHands::TwoHanded);
+                if reserved {
+                    return Err(ItemError::SlotOccupied);
+                }
+            }
+        }
         // apply all mutations (section 85: no partial state)
         let src_key = slot_key(from);
         self.slot_owner.remove(&src_key);
+        // leaving a hand slot releases the reservation a two-handed
+        // weapon held on the other hand (SPEC.md section 77)
+        if let ItemLocation::Equipment(player, slot) = from {
+            let other = match slot {
+                crate::item::EquipmentSlot::MainHand => Some(crate::item::EquipmentSlot::OffHand),
+                crate::item::EquipmentSlot::OffHand => Some(crate::item::EquipmentSlot::MainHand),
+                _ => None,
+            };
+            if let Some(other) = other {
+                let other_key = slot_key(ItemLocation::Equipment(player, other));
+                if self.slot_owner.get(&other_key) == Some(&id) {
+                    self.slot_owner.remove(&other_key);
+                }
+            }
+        }
         self.slot_owner.insert(dest_key, id);
+        // a two-handed weapon also occupies the other hand slot
+        if let ItemLocation::Equipment(player, slot) = to {
+            if self
+                .items
+                .get(&id)
+                .is_some_and(|i| i.hands == crate::item::ItemHands::TwoHanded)
+            {
+                let other = match slot {
+                    crate::item::EquipmentSlot::MainHand => {
+                        Some(crate::item::EquipmentSlot::OffHand)
+                    }
+                    crate::item::EquipmentSlot::OffHand => {
+                        Some(crate::item::EquipmentSlot::MainHand)
+                    }
+                    _ => None,
+                };
+                if let Some(other) = other {
+                    self.slot_owner
+                        .insert(slot_key(ItemLocation::Equipment(player, other)), id);
+                }
+            }
+        }
         self.locations.insert(id, to);
         Ok(())
+    }
+
+    /// Whether both hand slots are jointly reserved by a two-handed
+    /// weapon (SPEC.md section 77).
+    pub fn hand_slot_owner(
+        &self,
+        player: PlayerId,
+        slot: crate::item::EquipmentSlot,
+    ) -> Option<ItemId> {
+        self.slot_owner
+            .get(&slot_key(ItemLocation::Equipment(player, slot)))
+            .copied()
     }
 
     /// Atomically swap the occupants of two equipment slots (SPEC.md

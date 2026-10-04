@@ -463,6 +463,7 @@ mod tests {
             durability: Some(50),
             flags: 0,
             charges: None,
+            hands: Default::default(),
         };
         let item_id = item.id;
         inv.spawn_ground(
@@ -532,6 +533,7 @@ mod tests {
             durability: Some(50),
             flags: 0,
             charges: None,
+            hands: Default::default(),
         };
         let item_id = item.id;
         inv.spawn_ground(

@@ -582,6 +582,7 @@ fn charged_item_spends_one_charge_per_cast() {
             current: 3,
             max: 5,
         }),
+        hands: Default::default(),
     };
     inst.inventory
         .spawn_ground(charged, arpg_core::LevelInstanceId(0), WorldPos::new(0, 0));
@@ -630,6 +631,7 @@ fn exhausted_charges_stop_supplying_the_skill() {
                 current: 0,
                 max: 4,
             }),
+            hands: Default::default(),
         },
         arpg_core::LevelInstanceId(0),
         WorldPos::new(0, 0),
