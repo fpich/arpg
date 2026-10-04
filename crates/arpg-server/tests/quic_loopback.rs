@@ -244,6 +244,7 @@ async fn empty_grace_expires_saves_and_destroys() {
     let game = Arc::new(Mutex::new(GameInstance::new(data, rules, [7u8; 32])));
     let policy = arpg_server::policy::ServerPolicy {
         empty_grace_ticks: 3,
+        reconnect_grace_ticks: 3,
     };
     let (mut server, cert_der) =
         GameServer::bind_loopback_with_policy(Arc::clone(&game), policy).unwrap();
@@ -412,4 +413,260 @@ async fn command_flood_is_rate_limited() {
     );
     assert!(accepted > 0, "the first commands within burst must pass");
     shutdown_tx.send(()).await.unwrap();
+}
+
+#[tokio::test]
+async fn reconnect_grace_expires_saves_and_removes_character() {
+    let data = Arc::new(arpg_data::GameData::default());
+    let rules = Arc::new(arpg_rules::GameRules::default());
+    let game = Arc::new(Mutex::new(GameInstance::new(data, rules, [9u8; 32])));
+    let policy = arpg_server::policy::ServerPolicy {
+        empty_grace_ticks: 10_000,
+        reconnect_grace_ticks: 3,
+    };
+    let (mut server, cert_der) =
+        GameServer::bind_loopback_with_policy(Arc::clone(&game), policy).unwrap();
+    let repository = Arc::new(std::sync::Mutex::new(
+        arpg_persistence::CharacterRepository::new(),
+    ));
+    server.set_repository(Arc::clone(&repository));
+    let server = Arc::new(server);
+    let addr = server.local_addr;
+    let (shutdown_tx, shutdown_rx) = tokio::sync::mpsc::channel(1);
+    tokio::spawn(Arc::clone(&server).serve(shutdown_rx));
+    let client = client_endpoint(cert_der.clone());
+    let conn = client.connect(addr, "localhost").unwrap().await.unwrap();
+    let (mut send, mut recv) = conn.open_bi().await.unwrap();
+    let hello = msg::ClientHello {
+        protocol_version: arpg_server::PROTOCOL_VERSION.0,
+        client_build: 1,
+        supported_features: vec![],
+    };
+    send.write_all(&encode_frame(&hello)).await.unwrap();
+    let _ = read_frame(&mut recv).await;
+    let join = msg::JoinGameRequest {
+        game_id: vec![],
+        character_id: 1,
+    };
+    send.write_all(&encode_frame(&join)).await.unwrap();
+    let _ = read_frame(&mut recv).await;
+    conn.close(quinn::VarInt::from(0u32), b"drop");
+    // the reconnect grace (3 ticks = 120ms) expires: the character is
+    // saved then removed from the world (sections 146-147)
+    tokio::time::sleep(std::time::Duration::from_millis(700)).await;
+    let snapshot = repository
+        .lock()
+        .unwrap()
+        .load(PlayerId(1))
+        .unwrap()
+        .cloned();
+    assert!(
+        snapshot.is_some(),
+        "character must be saved at grace expiry"
+    );
+    assert!(
+        game.lock().unwrap().state.players.is_empty(),
+        "character must be removed from the world at grace expiry"
+    );
+    shutdown_tx.send(()).await.unwrap();
+}
+
+#[tokio::test]
+async fn reconnect_within_grace_resumes_the_session() {
+    let data = Arc::new(arpg_data::GameData::default());
+    let rules = Arc::new(arpg_rules::GameRules::default());
+    let game = Arc::new(Mutex::new(GameInstance::new(data, rules, [11u8; 32])));
+    let policy = arpg_server::policy::ServerPolicy {
+        empty_grace_ticks: 10_000,
+        reconnect_grace_ticks: 250,
+    };
+    let (mut server, cert_der) =
+        GameServer::bind_loopback_with_policy(Arc::clone(&game), policy).unwrap();
+    let repository = Arc::new(std::sync::Mutex::new(
+        arpg_persistence::CharacterRepository::new(),
+    ));
+    server.set_repository(Arc::clone(&repository));
+    let server = Arc::new(server);
+    let addr = server.local_addr;
+    let (shutdown_tx, shutdown_rx) = tokio::sync::mpsc::channel(1);
+    tokio::spawn(Arc::clone(&server).serve(shutdown_rx));
+    let client = client_endpoint(cert_der.clone());
+    let conn = client.connect(addr, "localhost").unwrap().await.unwrap();
+    let (mut send, mut recv) = conn.open_bi().await.unwrap();
+    let hello = msg::ClientHello {
+        protocol_version: arpg_server::PROTOCOL_VERSION.0,
+        client_build: 1,
+        supported_features: vec![],
+    };
+    send.write_all(&encode_frame(&hello)).await.unwrap();
+    let _ = read_frame(&mut recv).await;
+    let join = msg::JoinGameRequest {
+        game_id: vec![],
+        character_id: 1,
+    };
+    send.write_all(&encode_frame(&join)).await.unwrap();
+    let _ = read_frame(&mut recv).await;
+    conn.close(quinn::VarInt::from(0u32), b"drop");
+    // wait inside the 10-second grace window, then reconnect
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let conn2 = client.connect(addr, "localhost").unwrap().await.unwrap();
+    let (mut send2, mut recv2) = conn2.open_bi().await.unwrap();
+    send2.write_all(&encode_frame(&hello)).await.unwrap();
+    let _ = read_frame(&mut recv2).await;
+    send2.write_all(&encode_frame(&join)).await.unwrap();
+    let _ = read_frame(&mut recv2).await;
+    // still in the world: the reconnection resumed the session (146)
+    assert!(
+        game.lock()
+            .unwrap()
+            .state
+            .players
+            .contains_key(&PlayerId(1)),
+        "reconnection within the grace window must keep the character"
+    );
+    let snapshot = repository
+        .lock()
+        .unwrap()
+        .load(PlayerId(1))
+        .unwrap()
+        .cloned();
+    assert!(
+        snapshot.is_none(),
+        "no save may happen while the grace window is still running"
+    );
+    conn2.close(quinn::VarInt::from(0u32), b"done");
+    shutdown_tx.send(()).await.unwrap();
+}
+
+#[tokio::test]
+async fn accepted_trade_commits_against_the_sqlite_backend() {
+    let data = Arc::new(arpg_data::GameData::default());
+    let rules = Arc::new(arpg_rules::GameRules::default());
+    let game = Arc::new(Mutex::new(GameInstance::new(data, rules, [13u8; 32])));
+    let (mut server, cert_der) = GameServer::bind_loopback(Arc::clone(&game)).unwrap();
+    let store: Box<dyn arpg_persistence::PersistenceStore + Send> =
+        Box::new(arpg_persistence::sqlite::SqliteStore::in_memory().unwrap());
+    server.set_store(Arc::new(Mutex::new(store)));
+    let server = Arc::new(server);
+    let addr = server.local_addr;
+    let (shutdown_tx, shutdown_rx) = tokio::sync::mpsc::channel(1);
+    tokio::spawn(Arc::clone(&server).serve(shutdown_rx));
+    // two players join, open a trade, offer gold, both accept
+    let client = client_endpoint(cert_der.clone());
+    let mut senders = Vec::new();
+    for character_id in 1u32..=2u32 {
+        let conn = client.connect(addr, "localhost").unwrap().await.unwrap();
+        let (send, recv) = conn.open_bi().await.unwrap();
+        senders.push((conn, send, recv, character_id));
+    }
+    let hello = msg::ClientHello {
+        protocol_version: arpg_server::PROTOCOL_VERSION.0,
+        client_build: 1,
+        supported_features: vec![],
+    };
+    for (_, send, recv, _) in senders.iter_mut() {
+        send.write_all(&encode_frame(&hello)).await.unwrap();
+        let _ = read_frame(recv).await;
+    }
+    for (_, send, recv, character_id) in senders.iter_mut() {
+        let join = msg::JoinGameRequest {
+            game_id: vec![],
+            character_id: *character_id,
+        };
+        send.write_all(&encode_frame(&join)).await.unwrap();
+        let _ = read_frame(recv).await;
+    }
+    // fund both players so the gold offer validates (section 117)
+    {
+        let mut game = game.lock().unwrap();
+        for p in [PlayerId(1), PlayerId(2)] {
+            game.economy.gold.insert(
+                p,
+                arpg_sim::Gold {
+                    carried: 100,
+                    stash: 0,
+                },
+            );
+        }
+    }
+    // player 1 opens a trade with player 2
+    let trade_open = msg::CommandEnvelope {
+        sequence: 1,
+        client_tick: 1,
+        player_id: 1,
+        command: Some(msg::command_envelope::Command::Trade(msg::TradeCommand {
+            op: 0,
+            target_player: 2,
+            trade_id: 0,
+            item_ids: vec![],
+            gold: 0,
+        })),
+    };
+    senders[0]
+        .1
+        .write_all(&encode_frame(&trade_open))
+        .await
+        .unwrap();
+    // give the scheduler a few ticks to execute the open
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    // read the trade id back from the sim through the trades map
+    let trade_id = game
+        .lock()
+        .unwrap()
+        .trades
+        .iter_open()
+        .next()
+        .map(|(id, _)| id.0)
+        .expect("trade must be open");
+    // player 1 offers 30 gold, player 2 offers nothing, both accept
+    let offer = msg::CommandEnvelope {
+        sequence: 2,
+        client_tick: 1,
+        player_id: 1,
+        command: Some(msg::command_envelope::Command::Trade(msg::TradeCommand {
+            op: 1,
+            target_player: 0,
+            trade_id,
+            item_ids: vec![],
+            gold: 30,
+        })),
+    };
+    senders[0].1.write_all(&encode_frame(&offer)).await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    for (i, player_id) in [1u32, 2u32].iter().enumerate() {
+        let accept = msg::CommandEnvelope {
+            sequence: 3,
+            client_tick: 1,
+            player_id: *player_id,
+            command: Some(msg::command_envelope::Command::Trade(msg::TradeCommand {
+                op: 2,
+                target_player: 0,
+                trade_id,
+                item_ids: vec![],
+                gold: 0,
+            })),
+        };
+        senders[i]
+            .1
+            .write_all(&encode_frame(&accept))
+            .await
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+    // the host loop commits the fully accepted trade against the store
+    // within a couple of ticks (sections 117-118)
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    shutdown_tx.send(()).await.unwrap();
+    let committed = {
+        let game = game.lock().unwrap();
+        let trade = game
+            .trades
+            .get(arpg_persistence::TradeId(trade_id))
+            .expect("trade must exist");
+        trade.state == arpg_sim::TradeState::Committed
+    };
+    assert!(
+        committed,
+        "fully accepted trade must be committed via the store"
+    );
 }

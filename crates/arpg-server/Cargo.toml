@@ -11,6 +11,7 @@ arpg-sim.workspace = true
 arpg-metrics.workspace = true
 arpg-protocol.workspace = true
 arpg-persistence.workspace = true
+arpg-replay.workspace = true
 prost.workspace = true
 quinn.workspace = true
 rcgen = "0.13"
@@ -21,6 +22,7 @@ tracing.workspace = true
 [dev-dependencies]
 arpg-data.workspace = true
 arpg-rules.workspace = true
+arpg-persistence = { workspace = true, features = ["sqlite"] }
 rcgen = "0.13"
 quinn.workspace = true
 rustls-pki-types = "1"

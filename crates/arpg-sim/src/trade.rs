@@ -121,6 +121,16 @@ impl TradeSystem {
         TradeSystem::default()
     }
 
+    /// Deterministic iteration over open trades (SPEC.md section 116):
+    /// the host loop uses it to commit fully accepted trades each tick
+    /// (sections 117-118).
+    pub fn iter_open(&self) -> impl Iterator<Item = (TradeId, &Trade)> {
+        self.trades
+            .iter()
+            .filter(|(_, t)| t.state == TradeState::Open)
+            .map(|(id, t)| (*id, t))
+    }
+
     pub fn open(&mut self, a: PlayerId, b: PlayerId) -> TradeId {
         self.next_id += 1;
         let id = TradeId(self.next_id);
@@ -205,7 +215,7 @@ impl TradeSystem {
     /// back and the state returns to Open; the caller reports
     /// `PersistenceFailure` to the client.
     #[allow(clippy::too_many_arguments)]
-    pub fn commit<S: PersistenceStore>(
+    pub fn commit<S: PersistenceStore + ?Sized>(
         &mut self,
         id: TradeId,
         economy: &mut Economy,

@@ -303,6 +303,19 @@ impl GameInstance {
         self.event_buffer.emit(key, GameEvent::PlayerJoined(player));
     }
 
+    /// Definitive character departure (SPEC.md sections 146-147): the
+    /// reconnection grace expired, so the character leaves the world.
+    /// The caller saves the snapshot first (save-then-remove).
+    pub fn remove_player(&mut self, player: PlayerId) {
+        self.state.players.remove(&player);
+        self.state.movement_intents.remove(&player);
+        self.state.interact_intents.remove(&player);
+        self.actors.remove(&EntityId(player.0 as u64));
+        let key = self.next_event_key(EntityId(player.0 as u64));
+        self.event_buffer
+            .emit(key, GameEvent::PlayerRemoved(player));
+    }
+
     fn next_event_key(&mut self, source: EntityId) -> EventOrderKey {
         self.state.event_sequence += 1;
         EventOrderKey {
@@ -1161,7 +1174,7 @@ impl GameInstance {
 
     /// Commit a fully accepted trade against a persistence store
     /// (SPEC.md sections 117-118). Returns the commit outcome.
-    pub fn commit_trade<S: arpg_persistence::PersistenceStore>(
+    pub fn commit_trade<S: arpg_persistence::PersistenceStore + ?Sized>(
         &mut self,
         trade: u64,
         revisions: &std::collections::BTreeMap<PlayerId, arpg_persistence::CharacterRevision>,

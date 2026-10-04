@@ -74,6 +74,21 @@ pub struct GameServer {
     /// bounded channel per connected player; the host loop pushes
     /// encoded wire snapshots each tick.
     subscribers: Arc<Mutex<std::collections::BTreeMap<arpg_core::PlayerId, mpsc::Sender<Vec<u8>>>>>,
+    /// Connected and grace-window sessions (SPEC.md sections 128,
+    /// 146-147): the host loop advances every DisconnectedGrace window
+    /// each tick and runs the save-then-remove pipeline at expiry.
+    sessions: Arc<Mutex<std::collections::BTreeMap<arpg_core::PlayerId, Session>>>,
+    /// Reconnection grace policy handed to sessions (section 146).
+    reconnect_grace_ticks: u32,
+    /// Production replay recording (SPEC.md sections 157-159): every
+    /// scheduled command executed by the tick loop is appended, so a
+    /// whole hosted game stays reproducible from the replay alone.
+    replay: Arc<Mutex<arpg_replay::Replay>>,
+    /// Optional persistence store for trade commits (SPEC.md sections
+    /// 117-118): the host loop commits fully accepted trades against
+    /// it each tick; without one, ready trades are cancelled (an
+    /// in-memory-only game never commits in memory alone).
+    store: Option<Arc<Mutex<Box<dyn arpg_persistence::PersistenceStore + Send>>>>,
 }
 
 impl GameServer {
@@ -100,6 +115,15 @@ impl GameServer {
             crate::ratelimit::RatePolicy::reference(),
             8,
         )));
+        let replay = Arc::new(Mutex::new(arpg_replay::Replay::new(
+            arpg_replay::ReplayHeader {
+                replay_version: arpg_replay::REPLAY_VERSION,
+                engine_version: PROTOCOL_VERSION.0,
+                datapack_hash: [0; 32],
+                ruleset_hash: [0; 32],
+                root_seed: game.lock().unwrap().state.seed(),
+            },
+        )));
         Ok((
             GameServer {
                 endpoint,
@@ -110,6 +134,10 @@ impl GameServer {
                 repository: None,
                 limiter,
                 subscribers: Arc::new(Mutex::new(std::collections::BTreeMap::new())),
+                sessions: Arc::new(Mutex::new(std::collections::BTreeMap::new())),
+                reconnect_grace_ticks: policy.reconnect_grace_ticks,
+                replay,
+                store: None,
             },
             cert_der,
         ))
@@ -135,6 +163,21 @@ impl GameServer {
         self.repository = Some(repository);
     }
 
+    /// Attach a persistence backend for trade commits (sections 117-118):
+    /// a SqliteStore in production, MemoryStore in loopback tests.
+    pub fn set_store(
+        &mut self,
+        store: Arc<Mutex<Box<dyn arpg_persistence::PersistenceStore + Send>>>,
+    ) {
+        self.store = Some(store);
+    }
+
+    /// Take the recorded replay (sections 157-159): the caller owns the
+    /// bytes from the moment it takes it.
+    pub fn replay(&self) -> arpg_replay::Replay {
+        self.replay.lock().unwrap().clone()
+    }
+
     /// Background host loop (sections 148-149): ticks the game at the
     /// canonical tick rate, then the empty-grace guard; when the guard
     /// reports expiry the remaining characters are snapshotted and saved
@@ -146,12 +189,88 @@ impl GameServer {
             let mut interval = tokio::time::interval(tick_dur);
             loop {
                 interval.tick().await;
-                let expired = {
+                let (expired, _executed) = {
                     let mut game = self.game.lock().unwrap();
-                    game.tick();
+                    let result = game.tick();
                     self.limiter.lock().unwrap().tick();
-                    self.guard.lock().unwrap().tick_empty()
+                    let expired = self.guard.lock().unwrap().tick_empty();
+                    if !result.executed_commands.is_empty() {
+                        let mut replay = self.replay.lock().unwrap();
+                        for cmd in &result.executed_commands {
+                            replay.record_command(cmd);
+                        }
+                    }
+                    (expired, result.executed_commands)
                 };
+                // fully accepted trades are committed against the store
+                // every tick (sections 117-118); without a store a ready
+                // trade is cancelled, never confirmed in memory alone
+                {
+                    let mut game = self.game.lock().unwrap();
+                    let ready: Vec<(u64, Vec<arpg_core::PlayerId>)> = game
+                        .trades
+                        .iter_open()
+                        .filter(|(_, t)| t.accepted_a && t.accepted_b)
+                        .map(|(id, t)| (id.0, vec![t.a, t.b]))
+                        .collect();
+                    for (trade, parties) in ready {
+                        let revisions = parties
+                            .iter()
+                            .map(|p| (*p, arpg_persistence::CharacterRevision(0)))
+                            .collect::<std::collections::BTreeMap<_, _>>();
+                        let outcome = match &self.store {
+                            Some(store) => {
+                                let mut store = store.lock().unwrap();
+                                let store: &mut dyn arpg_persistence::PersistenceStore =
+                                    store.as_mut();
+                                game.commit_trade(trade, &revisions, store)
+                            }
+                            None => {
+                                let _ = game.trades.cancel(arpg_persistence::TradeId(trade));
+                                Ok(Ok(()))
+                            }
+                        };
+                        if outcome.is_err() {
+                            tracing::warn!(trade, "trade commit rejected");
+                        }
+                    }
+                }
+                // reconnect-grace windows (sections 146-147): advance each
+                // disconnected session; at expiry the character is saved
+                // then removed from the world
+                {
+                    let expired_players: Vec<arpg_core::PlayerId> = {
+                        let mut sessions = self.sessions.lock().unwrap();
+                        sessions
+                            .iter_mut()
+                            .filter_map(|(p, s)| s.tick_grace().then_some(*p))
+                            .collect::<Vec<_>>()
+                    };
+                    for player in expired_players {
+                        self.sessions.lock().unwrap().remove(&player);
+                        let snapshot = {
+                            let game = self.game.lock().unwrap();
+                            if game.state.players.contains_key(&player) {
+                                Some(game.character_snapshot(player))
+                            } else {
+                                None
+                            }
+                        };
+                        if let Some(snapshot) = snapshot {
+                            if let Some(repo) = &self.repository {
+                                repo.lock().unwrap().save(player, snapshot);
+                            }
+                            let mut game = self.game.lock().unwrap();
+                            game.remove_player(player);
+                            let players_left = game.state.players.len();
+                            self.guard.lock().unwrap().observe_players(players_left);
+                        }
+                        tracing::info!(
+                            player_identity_id = player.0,
+                            "reconnect grace expired: character saved and removed"
+                        );
+                    }
+                }
                 {
                     let subscribers = {
                         let mut subs = self.subscribers.lock().unwrap();
@@ -313,17 +432,34 @@ impl GameServer {
         tracing::info!(player_identity_id = player.0, "join request");
         let (server_tick, input_delay, datapack_hash, tick_rate) = {
             let mut game = self.game.lock().unwrap();
-            if game.rules.max_players as usize <= game.state.players.len() {
+            if game.rules.max_players as usize <= game.state.players.len()
+                && !game.state.players.contains_key(&player)
+            {
                 // game full: reject
                 return;
             }
-            let pos = arpg_core::WorldPos::new(0, 0);
-            game.add_player(player, pos);
+            if !game.state.players.contains_key(&player) {
+                let pos = arpg_core::WorldPos::new(0, 0);
+                game.add_player(player, pos);
+            }
             self.guard
                 .lock()
                 .unwrap()
                 .observe_players(game.state.players.len());
             session.player = player;
+            // session registry (sections 128, 146): a join by an identity
+            // still inside its grace window is a reconnection - the session
+            // resumes Running with the window cleared
+            let mut sessions = self.sessions.lock().unwrap();
+            if let Some(existing) = sessions.get_mut(&player) {
+                existing.reconnect();
+            } else {
+                sessions.insert(player, Session::new(player));
+            }
+            let registered = sessions.get_mut(&player).unwrap();
+            registered.handle_join_accepted(game.state.tick);
+            // mirror the registry state onto the connection-local session,
+            // which gates the reliable loop below (section 128)
             session.handle_join_accepted(game.state.tick);
             (
                 game.state.tick.0,
@@ -457,14 +593,20 @@ impl GameServer {
         datagram_task.abort();
         self.subscribers.lock().unwrap().remove(&player);
         self.limiter.lock().unwrap().unregister(player);
-        session.disconnect();
-        // sections 146-149: observe the player count after the session
+        // sections 146-147: the connection dropped, so the session enters
+        // the reconnection grace window - the character stays in the
+        // world and the host loop ticks the window down; at expiry the
+        // host loop saves the character and removes it from the world.
+        if let Some(s) = self.sessions.lock().unwrap().get_mut(&player) {
+            s.disconnect_with_policy(self.reconnect_grace_ticks);
+        }
+        // sections 148-149: observe the player count after the session
         // ends; the empty-grace guard starts counting down when the game
         // becomes empty. The character save + GameState destroy pipeline
         // runs at guard expiry (section 149), driven by the host loop.
         let players_left = {
             let game = self.game.lock().unwrap();
-            game.state.players.len().saturating_sub(1)
+            game.state.players.len()
         };
         self.guard.lock().unwrap().observe_players(players_left);
     }

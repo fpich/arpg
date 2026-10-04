@@ -12,6 +12,10 @@ use arpg_core::PlayerId;
 pub struct ServerPolicy {
     /// Ticks the game stays alive after becoming empty.
     pub empty_grace_ticks: u32,
+    /// Reconnection grace window (section 146): ticks a disconnected
+    /// session keeps its character in the world before the definitive
+    /// save-then-remove (section 147). Pure policy.
+    pub reconnect_grace_ticks: u32,
 }
 
 impl Default for ServerPolicy {
@@ -19,6 +23,7 @@ impl Default for ServerPolicy {
         // 10 minutes at 25 tps
         ServerPolicy {
             empty_grace_ticks: 10 * 60 * 25,
+            reconnect_grace_ticks: 30 * 25,
         }
     }
 }
@@ -103,6 +108,7 @@ mod tests {
     fn empty_game_counts_down_then_destroys() {
         let policy = ServerPolicy {
             empty_grace_ticks: 3,
+            reconnect_grace_ticks: 750,
         };
         let mut guard = GameGuard::new(policy);
         guard.observe_players(1);
@@ -119,6 +125,7 @@ mod tests {
     fn rejoin_within_grace_rearms_the_window() {
         let policy = ServerPolicy {
             empty_grace_ticks: 3,
+            reconnect_grace_ticks: 750,
         };
         let mut guard = GameGuard::new(policy);
         guard.observe_players(0);

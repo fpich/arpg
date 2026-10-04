@@ -136,6 +136,7 @@ dependencies = [
  "arpg-metrics",
  "arpg-persistence",
  "arpg-protocol",
+ "arpg-replay",
  "arpg-rules",
  "arpg-sim",
  "prost",
