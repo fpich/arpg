@@ -74,4 +74,44 @@ pub struct LevelDefinition {
 pub struct ItemDefinition {
     pub id: ItemId,
     pub name: String,
+    /// Consumable effect (SPEC.md section 83). None for non-potions.
+    pub potion: Option<PotionEffect>,
+}
+
+/// Potion effect (SPEC.md section 83): instant value, value over time,
+/// or a resistance modifier with a duration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PotionEffect {
+    /// Instant life/mana gain in fixed-point units.
+    Instant { life_fp: i64, mana_fp: i64 },
+    /// Value over time: total fixed-point gain spread over ticks.
+    OverTime {
+        life_fp: i64,
+        mana_fp: i64,
+        ticks: u32,
+    },
+    /// Temporary resistance modifier (percent) with a duration in ticks.
+    Resistance {
+        kind: ResistKind,
+        percent: i64,
+        ticks: u32,
+    },
+    /// Cures a state (antidote/thawing/stamina).
+    Cure { kind: CureKind },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResistKind {
+    Fire,
+    Cold,
+    Lightning,
+    Poison,
+    Magic,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CureKind {
+    Poison,
+    Cold,
+    Stamina,
 }

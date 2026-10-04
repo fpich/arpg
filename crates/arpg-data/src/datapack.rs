@@ -3,7 +3,8 @@
 //! tables here; the runtime never depends on a source file format.
 
 use crate::{
-    GameData, ItemDefinition, LevelDefinition, MonsterDefinition, SkillDefinition, SkillProgramData,
+    CureKind, GameData, ItemDefinition, LevelDefinition, MonsterDefinition, PotionEffect,
+    ResistKind, SkillDefinition, SkillProgramData,
 };
 use arpg_core::{ClassId, ItemId, LevelDefId, MonsterDefId, SkillId};
 use std::collections::BTreeMap;
@@ -884,14 +885,126 @@ pub fn compile_reference_datapack() -> GameData {
             ItemDefinition {
                 id: ItemId(next_id as u128),
                 name: (*name).into(),
+                potion: None,
             },
         );
+    }
+    // potions (SPEC.md section 83): health/mana/rejuvenation instant,
+    // antidote/thawing/stamina cures, one resistance flask
+    for (i, def) in potion_definitions().into_iter().enumerate() {
+        items.insert(1000 + i as u32, def);
     }
     data.items = items;
 
     // content hash over the compiled content
     data.content_hash = content_hash(&data);
     data
+}
+
+fn potion_definitions() -> Vec<ItemDefinition> {
+    use PotionEffect::*;
+    let mk = |id: u32, name: &str, effect: PotionEffect| ItemDefinition {
+        id: ItemId(id as u128),
+        name: name.into(),
+        potion: Some(effect),
+    };
+    vec![
+        mk(
+            1000,
+            "Minor Healing Potion",
+            Instant {
+                life_fp: 6000,
+                mana_fp: 0,
+            },
+        ),
+        mk(
+            1001,
+            "Healing Potion",
+            Instant {
+                life_fp: 12000,
+                mana_fp: 0,
+            },
+        ),
+        mk(
+            1002,
+            "Greater Healing Potion",
+            Instant {
+                life_fp: 24000,
+                mana_fp: 0,
+            },
+        ),
+        mk(
+            1003,
+            "Minor Mana Potion",
+            Instant {
+                life_fp: 0,
+                mana_fp: 6000,
+            },
+        ),
+        mk(
+            1004,
+            "Mana Potion",
+            Instant {
+                life_fp: 0,
+                mana_fp: 12000,
+            },
+        ),
+        mk(
+            1005,
+            "Rejuvenation Potion",
+            Instant {
+                life_fp: 12000,
+                mana_fp: 12000,
+            },
+        ),
+        mk(
+            1006,
+            "Full Rejuvenation Potion",
+            Instant {
+                life_fp: 25000,
+                mana_fp: 25000,
+            },
+        ),
+        mk(
+            1007,
+            "Antidote Potion",
+            Cure {
+                kind: CureKind::Poison,
+            },
+        ),
+        mk(
+            1008,
+            "Thawing Potion",
+            Cure {
+                kind: CureKind::Cold,
+            },
+        ),
+        mk(
+            1009,
+            "Stamina Potion",
+            Cure {
+                kind: CureKind::Stamina,
+            },
+        ),
+        mk(
+            1010,
+            "Elixir of Fire Resistance",
+            Resistance {
+                kind: ResistKind::Fire,
+                percent: 50,
+                ticks: 600,
+            },
+        ),
+        mk(
+            1011,
+            "Slow Refill Potion",
+            OverTime {
+                life_fp: 30000,
+                mana_fp: 0,
+                ticks: 100,
+            },
+        ),
+    ]
 }
 
 fn content_hash(data: &GameData) -> [u8; 32] {
@@ -984,7 +1097,7 @@ mod tests {
         assert_eq!(CLASSES.len(), 7, "7 classes");
         assert_eq!(DIFFICULTIES.len(), 3, "3 difficulties");
         assert_eq!(ACTS.len(), 5, "5 acts");
-        assert_eq!(data.items.len(), 50, "50 base items");
+        assert_eq!(data.items.len(), 62, "50 base items + 12 potions");
         assert_eq!(AFFIXES.len(), 30, "30 affixes");
         assert_eq!(UNIQUES.len(), 5, "5 uniques");
         assert_eq!(RUNES.len(), 10, "10 runes");

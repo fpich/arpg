@@ -68,6 +68,7 @@ pub enum CommandPayload {
     Move { x: i32, y: i32 },
     UseSkill { skill: u32, x: i32, y: i32 },
     Interact { target: u64 },
+    UseItem { item: u128 },
     NoOp,
 }
 
@@ -99,6 +100,7 @@ impl Replay {
                 y: s.target.map(|t| t.y).unwrap_or(0),
             },
             arpg_sim::ClientCommand::Interact(i) => CommandPayload::Interact { target: i.target.0 },
+            arpg_sim::ClientCommand::UseItem(u) => CommandPayload::UseItem { item: u.item.0 },
             arpg_sim::ClientCommand::NoOp => CommandPayload::NoOp,
         };
         self.entries.push(ReplayEntry::Command {
@@ -156,6 +158,10 @@ impl Replay {
                         CommandPayload::Interact { target } => {
                             out.push(2);
                             out.extend_from_slice(&target.to_le_bytes());
+                        }
+                        CommandPayload::UseItem { item } => {
+                            out.push(4);
+                            out.extend_from_slice(&item.to_le_bytes());
                         }
                         CommandPayload::NoOp => out.push(3),
                     }
@@ -247,6 +253,13 @@ impl Replay {
                         CommandPayload::Interact { target }
                     }
                     3 => CommandPayload::NoOp,
+                    4 => {
+                        let mut b = [0u8; 16];
+                        b.copy_from_slice(r.take(16)?);
+                        CommandPayload::UseItem {
+                            item: u128::from_le_bytes(b),
+                        }
+                    }
                     _ => return Err("bad payload tag"),
                 };
                 entries.push(ReplayEntry::Command {
@@ -418,6 +431,11 @@ impl<'a> Replayer<'a> {
                             })
                         }
                         CommandPayload::NoOp => arpg_sim::ClientCommand::NoOp,
+                        CommandPayload::UseItem { item } => {
+                            arpg_sim::ClientCommand::UseItem(arpg_sim::command::UseItemIntent {
+                                item: arpg_core::ItemId(*item),
+                            })
+                        }
                     },
                 };
                 self.game.submit_command(envelope);

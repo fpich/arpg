@@ -26,6 +26,9 @@ pub struct PlayerState {
     pub level: i64,
     /// Experience points (SPEC.md section 110).
     pub experience: u64,
+    /// Active over-time potion effect (SPEC.md section 83): remaining
+    /// fixed-point value and ticks, applied once per tick.
+    pub active_regen: Option<(i64, i64, u32)>,
 }
 
 /// A monster in the world: position, life, lifecycle-able target of
@@ -221,6 +224,7 @@ impl GameInstance {
                 mana: 50,
                 level: 1,
                 experience: 0,
+                active_regen: None,
             },
         );
         self.actors.insert(
@@ -537,6 +541,11 @@ impl GameInstance {
                     {
                         self.start_cast(cmd.player, intent.skill, intent.target, tick);
                     }
+                    ClientCommand::UseItem(intent)
+                        if self.state.players.contains_key(&cmd.player) =>
+                    {
+                        self.use_potion(cmd.player, intent.item);
+                    }
                     _ => {}
                 }
             }
@@ -544,6 +553,10 @@ impl GameInstance {
 
         if let Phase::Perception = phase {
             self.ai_perceive();
+        }
+
+        if let Phase::Regeneration = phase {
+            self.apply_potion_regen();
         }
 
         if let Phase::AiDecision = phase {
@@ -655,6 +668,71 @@ impl GameInstance {
     /// A monster attacks a player: melee-range damage applied through the
     /// normal damage path so kill credit and PendingDeath work (SPEC.md
     /// sections 13-14, 46).
+    /// Drink a potion (SPEC.md sections 82-83): the item must exist in the
+    /// player's inventory or belt; its effect applies instantly or arms an
+    /// over-time regen consumed one tick later per tick. The potion is
+    /// consumed on use.
+    pub fn use_potion(&mut self, player: PlayerId, item: arpg_core::ItemId) -> bool {
+        let Some(def_id) = self.inventory.get(item).map(|i| i.definition) else {
+            return false;
+        };
+        let Some(def) = self.data.items.get(&def_id.0) else {
+            return false;
+        };
+        let Some(effect) = def.potion else {
+            return false;
+        };
+        match effect {
+            arpg_data::PotionEffect::Instant { life_fp, mana_fp } => {
+                if let Some(p) = self.state.players.get_mut(&player) {
+                    p.life += crate::damage::fixed_to_units(life_fp);
+                    p.mana += crate::damage::fixed_to_units(mana_fp);
+                }
+            }
+            arpg_data::PotionEffect::OverTime {
+                life_fp,
+                mana_fp,
+                ticks,
+            } => {
+                if let Some(p) = self.state.players.get_mut(&player) {
+                    p.active_regen = Some((life_fp, mana_fp, ticks.max(1)));
+                }
+            }
+            arpg_data::PotionEffect::Resistance { .. } | arpg_data::PotionEffect::Cure { .. } => {
+                // resistance/cure states land with the states system (54);
+                // the potion is consumed with no immediate effect here
+            }
+        }
+        self.inventory.remove(item);
+        let key = self.next_event_key(EntityId(player.0 as u64));
+        self.event_buffer.emit(key, GameEvent::ItemPickedUp(item));
+        true
+    }
+
+    /// Apply one tick of active over-time potion regen (section 83).
+    fn apply_potion_regen(&mut self) {
+        let players: Vec<PlayerId> = self.state.players.keys().copied().collect();
+        for player in players {
+            let Some((life_fp, mana_fp, ticks)) =
+                self.state.players.get(&player).and_then(|p| p.active_regen)
+            else {
+                continue;
+            };
+            let per_tick_life = life_fp / ticks as i64;
+            let per_tick_mana = mana_fp / ticks as i64;
+            if let Some(p) = self.state.players.get_mut(&player) {
+                p.life += crate::damage::fixed_to_units(per_tick_life);
+                p.mana += crate::damage::fixed_to_units(per_tick_mana);
+                if ticks <= 1 {
+                    p.active_regen = None;
+                } else {
+                    p.active_regen =
+                        Some((life_fp - per_tick_life, mana_fp - per_tick_mana, ticks - 1));
+                }
+            }
+        }
+    }
+
     pub fn monster_attack(&mut self, monster: EntityId, target: EntityId) {
         let Some(m) = self.monsters.get(&monster) else {
             return;

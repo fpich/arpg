@@ -86,6 +86,7 @@ fn snapshot_contains_only_client_visible_state() {
             mana: 40,
             level: 1,
             experience: 0,
+            active_regen: None,
         },
     );
     let snap = arpg_server::bridge::snapshot_to_wire(1, Tick(5), &players, 9);
